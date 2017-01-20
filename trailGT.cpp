@@ -4336,8 +4336,8 @@ void add_all_images_from_file(string impathfilename)
   inStream.open(impathfilename.c_str());
 
   if (!inStream.good()) {
-    printf("problem opening %s -- exiting\n", impathfilename.c_str());
-    exit(1);
+    printf("problem opening %s -- skipping\n", impathfilename.c_str());
+    return;
   }
 
   while (getline(inStream, line)) 
