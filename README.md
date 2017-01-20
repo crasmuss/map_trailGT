@@ -7,17 +7,22 @@ Untar it in the scallop_data directory of this repository
 ## To compile and run
 
 cmake .
+
 make
+
 ./map_trailGT
 
 
 ## Instructions
 
 'x' key = go to next image
+
 'z' key = go to previous image
+
 'S' = save all bounding boxes to file
 
 Left mouse click to start bounding box upper-left corner
+
 Drag to lower-right corner
 
 Bounding box is indicated by purple box -- must contain a green point which indicates a scallop.
