@@ -1,0 +1,14 @@
+/warthog_logs/Jun_11_2009_Thu_11_42_31_AM/omni_images/
+/warthog_logs/Jun_11_2009_Thu_11_53_27_AM/omni_images/
+/warthog_logs/Jun_11_2009_Thu_11_59_38_AM/omni_images/
+/warthog_logs/Jun_11_2009_Thu_12_06_38_PM/omni_images/
+/warthog_logs/Jun_11_2009_Thu_12_13_08_PM/omni_images/
+
+/warthog_logs/Aug_05_2011_Fri_11_50_24_AM/omni_images/
+/warthog_logs/Aug_05_2011_Fri_11_54_36_AM/omni_images/
+/warthog_logs/Aug_05_2011_Fri_12_25_11_PM/omni_images/
+/warthog_logs/Aug_05_2011_Fri_12_29_30_PM/omni_images/
+
+/warthog_logs/Aug_28_2009_Fri_12_30_57_PM/omni_images/
+/warthog_logs/Aug_28_2009_Fri_12_36_14_PM/omni_images/
+/warthog_logs/Aug_28_2009_Fri_12_46_56_PM/omni_images/
