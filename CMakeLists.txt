@@ -5,7 +5,6 @@ cmake_minimum_required(VERSION 2.8)
 project(map_trailGT_project)
 
 #set(OpenCV_DIR /media/12_04/home/cer/Documents/ud/arv_s2016/software/opencv-3.1.0)
-set(OpenCV_DIR /Users/amdin/Downloads/opencv-3.2.0/build)
 
 # Find OpenCV, you may need to set OpenCV_DIR variable
 # to the absolute path to the directory containing OpenCVConfig.cmake file

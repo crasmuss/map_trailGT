@@ -5931,6 +5931,7 @@ bool getScallopSignature(string s, string & sig)
 void saveScallopMap()
 {
   int no_params_total = 0;
+  int num_with_scale = 0;
   //  FILE *fp = fopen("/home/cer/Documents/data/scallops/scale_data.csv", "w"); // stdout;
   FILE *fp = fopen("./scallop_data/scale_data.csv", "w"); // stdout;
   
@@ -5946,10 +5947,12 @@ void saveScallopMap()
     if (iter != scallop_line_idx_idx_map.end()) {
       //printf("params\n");
       ScallopParams scparams = scallop_params_vect[(*iter).second];
-      if (scparams.has_scale)
+      if (scparams.has_scale) {
 	fprintf(fp, "%i,%i,%i,%i,",
 		scparams.p_upper_left.x, scparams.p_upper_left.y,
 		scparams.p_lower_right.x, scparams.p_lower_right.y);
+	num_with_scale++;
+      }
       else
 	fprintf(fp, "-1,-1,-1,-1,");
       fprintf(fp, "%s\n", scallop_csv_line_endings[i].c_str());
@@ -5966,6 +5969,7 @@ void saveScallopMap()
   fclose(fp);
   
   printf("%i / %i\n", no_params_total, (int) scallop_csv_lines.size());
+  printf("%i scallops with scale saved\n", num_with_scale);
 }
 
 //----------------------------------------------------------------------------
