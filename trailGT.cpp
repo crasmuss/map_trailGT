@@ -5190,6 +5190,7 @@ void trail_draw_other_windows()
 
 //----------------------------------------------------------------------------
 
+
 void scallop_draw_overlay()
 {
   stringstream ss;
@@ -5974,6 +5975,8 @@ void saveScallopMap()
 
 //----------------------------------------------------------------------------
 
+// THIS IS A FISH!!! problem at 1389 ./scallop_data/images/frame004911_1436666595_247114.jpg
+
 int loadScallopMap(bool is_hunter)
 {
   ifstream inStream;
@@ -6094,6 +6097,9 @@ int loadScallopMap(bool is_hunter)
 	scallop_params_vect[scallop_idx].p_upper_left = scparams.p_upper_left;
 	scallop_params_vect[scallop_idx].p_lower_right = scparams.p_lower_right;
 	scallop_params_vect[scallop_idx].has_scale = true;
+      }
+      else {
+	printf("problem at %i %s ? \n", scallop_line_idx_idx_map[line_num - 1], imname.c_str());
       }
     }
   }
