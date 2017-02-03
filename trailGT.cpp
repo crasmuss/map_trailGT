@@ -18,7 +18,6 @@
 #include <sys/times.h>
 #include <sys/time.h>
 
-
 #include "tinyxml.h"
 #include "tinystr.h"
 
@@ -28,7 +27,7 @@ using namespace cv;
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
 
-typedef vector <Point>  VertVect;
+typedef vector <Point>  VertVect;      // this is how trail poly is represented
 
 struct DistortParams
 {
@@ -38,12 +37,14 @@ struct DistortParams
 
 };
 
+// this covers live and dead scallops, plus fish, sharks, skates, starfish, etc.
+
 struct ScallopParams
 {
   Point p_annotation;                   // annotator's click 
   Point p_upper_left, p_lower_right;    // bounding box
   int type;
-  bool has_scale;
+  bool has_scale;                       // whether p_upper_left, p_lower_right have been filled in
 };
 
 struct TreeParams
@@ -101,6 +102,9 @@ void saveVertVectNoParens(FILE *, VertVect &);
 
 void saveScallopMap(); int loadScallopMap();
 int loadScallopMap(bool);
+void write_traintest_scallop(string = "/tmp/scallop_data", float = 0.8);
+void compute_stats_traintest_scallop();
+bool filter_for_traintest_scallop(ScallopParams &);
 
 int most_isolated_nonvert_image_idx();
 int most_isolated_nonvert_image_idx(int);
@@ -155,10 +159,13 @@ vector <Point> load_xml_polygon(string, float = 1.0);
 #define TREE_MODE     2
 #define SCALLOP_MODE  3
 
-#define SCALLOP_TYPE  1
-#define SHARK_TYPE    2    // also "Dogfish shark"
-#define FISH_TYPE     3
-// also "Can", "Squid", "Skate", "Starfish"
+#define SCALLOP_ALIVE_TYPE 1
+#define SCALLOP_DEAD_TYPE  2
+#define SHARK_TYPE         3    // also "Dogfish shark"
+#define FISH_TYPE          4
+#define SKATE_TYPE         5
+#define STARFISH_TYPE      6
+// also "Can", "Squid"
 // also empty, "sc"
 
 #define SCALLOP_UP    1.6   // from Hunter's web coords to image coords
@@ -315,6 +322,9 @@ int output_height = TOP_AND_BOTTOM_TEST_OUTPUT_HEIGHT; // TEST_IMAGE_SIZE;  // 7
 #define MNIST_IMAGE_SIZE   28
 #define TEST_IMAGE_SIZE      64
 //#define MNIST_IMAGE_SIZE   100
+
+#define SCALLOP_IMAGE_WIDTH        1280
+#define SCALLOP_IMAGE_HEIGHT       960
 
 
 int distort_max_horizontal_delta = 75;
@@ -5075,17 +5085,33 @@ void onKeyPress(char c, bool print_help)
     if (print_help)
       printf("T = write traintest for localization\n");
     else {
-      //    write_traintest_vanilla_grayscale();
+      if (object_input_mode == TRAIL_MODE) {
+	//    write_traintest_vanilla_grayscale();
 #ifdef OUTPUT_CHOCOLATE_DATA
-      write_traintest_chocolate_color();
+	write_traintest_chocolate_color();
 #elif defined(OUTPUT_STRAWBERRY_DATA)
-      write_traintest_strawberry_color();
+	write_traintest_strawberry_color();
 #elif defined(OUTPUT_PEACH_DATA)
-      write_traintest_peach_color();
+	write_traintest_peach_color();
 #else
-      printf("undefined output data type\n");
-      exit(1);
+	printf("undefined output data type\n");
+	exit(1);
 #endif
+      }
+      else if (object_input_mode == SCALLOP_MODE) {
+	write_traintest_scallop();
+      }
+    }
+  }
+
+    // compute stats
+
+  if (c == 'Y' || print_help) {
+    if (print_help)
+      printf("Y = compute stats\n");
+    else {
+      if (object_input_mode == SCALLOP_MODE) 
+	compute_stats_traintest_scallop();
     }
   }
 
@@ -5237,7 +5263,10 @@ void scallop_draw_overlay()
 	rectangle(draw_im, ul, lr, Scalar(0, 255, 0), 2);
 
 	if (scparams.has_scale) {
-	  rectangle(draw_im, scparams.p_upper_left, scparams.p_lower_right, Scalar(255, 0, 255), 2);
+	  rectangle(draw_im, scparams.p_upper_left, scparams.p_lower_right, Scalar(128, 0, 128), 2);
+	}
+	if (filter_for_traintest_scallop(scparams)) {
+	  rectangle(draw_im, scparams.p_upper_left, scparams.p_lower_right, Scalar(255, 0, 255), 3);
 	}
       }
     }
@@ -5854,22 +5883,27 @@ bool getScallopParams(bool is_hunter, string s, ScallopParams & scparams, int & 
 	scparams.has_scale = false;
     }
     
-    scparams.type = SCALLOP_TYPE;
     //    printf("scallop %i, %i\n", scparams.p_annotation.x, scparams.p_annotation.y);
 
     // line ends with "alive", "dead", or "none"
 
     pos = s.find("alive");
-    if (pos != std::string::npos) 
+    if (pos != std::string::npos) {
+      scparams.type = SCALLOP_ALIVE_TYPE;
       params_end_index = pos - 1;
+    }
     else {
       pos = s.find("dead");
-      if (pos != std::string::npos) 
+      if (pos != std::string::npos) {
+	scparams.type = SCALLOP_DEAD_TYPE;
 	params_end_index = pos - 1;
+      }
       else {
 	pos = s.find("none");
-	if (pos != std::string::npos) 
+	if (pos != std::string::npos) {
+	  scparams.type = SCALLOP_DEAD_TYPE;
 	  params_end_index = pos - 1;
+	}
 	// none of those three words was found -- error
 	else {
 	  printf("category does not match alive, dead, or none -- skipping\n");
@@ -5929,6 +5963,309 @@ bool getScallopSignature(string s, string & sig)
 
 //----------------------------------------------------------------------------
 
+bool filter_for_traintest_scallop(ScallopParams & scparams)
+{
+  int min_edge_dist = 10;
+
+  if (!scparams.has_scale)
+    return false;
+  if (scparams.type != SCALLOP_ALIVE_TYPE)
+    return false;
+  if (scparams.p_upper_left.x < min_edge_dist || scparams.p_lower_right.x < min_edge_dist ||
+      scparams.p_upper_left.x >= (SCALLOP_IMAGE_WIDTH - min_edge_dist) || scparams.p_lower_right.x >= (SCALLOP_IMAGE_WIDTH - min_edge_dist))
+    return false;
+  if (scparams.p_upper_left.y < min_edge_dist || scparams.p_lower_right.y < min_edge_dist || 
+      scparams.p_upper_left.y >= (SCALLOP_IMAGE_HEIGHT - min_edge_dist) || scparams.p_lower_right.y >= (SCALLOP_IMAGE_HEIGHT - min_edge_dist))
+    return false;
+  
+  return true;
+}
+
+//----------------------------------------------------------------------------
+
+void compute_stats_traintest_scallop()
+{
+  vector < pair <string, ScallopParams > > scallop_traintest;
+  vector < string > image_sig_vect;
+  string date_str = string(UD_datetime_string());
+  string image_sig;
+  set < string > image_sig_set;
+
+  printf("csv lines %i, num scallop params %i\n",
+	 scallop_csv_lines.size(), scallop_params_vect.size());
+
+  // filter
+  
+  int scallop_idx = 0;
+  int w_total = 0;
+  int h_total = 0;
+  int w_min = 1000;
+  int w_max = 0;
+  int h_min = 1000;
+  int h_max = 0;
+  float aspect_min = 100.0;
+  float aspect_max = 0.0;
+  
+  scallop_traintest.clear();
+
+  for (int i = 0; i < scallop_csv_lines.size(); i++) {
+
+    map<int, int>::iterator iter = scallop_line_idx_idx_map.find(i);
+    if (iter != scallop_line_idx_idx_map.end()) {
+      ScallopParams scparams = scallop_params_vect[(*iter).second];
+
+      //    ScallopParams scparams = scallop_params_vect[i];
+      if (filter_for_traintest_scallop(scparams)) {
+
+	int w = scparams.p_lower_right.x - scparams.p_upper_left.x;
+	int h = scparams.p_lower_right.y - scparams.p_upper_left.y;
+	float aspect = (float) w / (float) h;
+	
+	w_total += w;
+	h_total += h;
+
+	if (w < w_min)
+	  w_min = w;
+	if (w > w_max)
+	  w_max = w;
+
+	if (h < h_min)
+	  h_min = h;
+	if (h > h_max)
+	  h_max = h;
+
+	if (aspect < aspect_min)
+	  aspect_min = aspect;
+	if (aspect > aspect_max)
+	  aspect_max = aspect;
+
+	printf("%i, %i, %i, %.2f\n",
+	       scallop_idx, w, h, aspect);
+
+	//	printf("%i, %i, %i, %i, %i\n",
+	//      scallop_idx,
+	//      scparams.p_upper_left.x, scparams.p_upper_left.y,
+	//      scparams.p_lower_right.x, scparams.p_lower_right.y);
+
+	
+	scallop_idx++;
+
+	
+      }
+    }
+  }
+
+  printf("%i scallops passed filter\n", scallop_idx);
+  printf("w: min = %i, max = %i\n", w_min, w_max);
+  printf("h: min = %i, max = %i\n", h_min, h_max);
+  printf("aspect: min = %.2f, max = %.2f\n", aspect_min, aspect_max);
+  float w_mean = (float) w_total / (float) scallop_idx;
+  float h_mean = (float) h_total / (float) scallop_idx;
+  float aspect_mean = w_mean / h_mean;
+  printf("w mean = %.2f, h mean = %.2f, aspect mean = %.2f\n", w_mean, h_mean, aspect_mean);
+}
+
+//----------------------------------------------------------------------------
+
+void write_traintest_scallop(string dir, float training_fraction)
+{
+  vector < pair <string, ScallopParams > > scallop_traintest;
+  vector < string > image_sig_vect;
+  string date_str = string(UD_datetime_string());
+  string image_sig;
+  set < string > image_sig_set;
+  stringstream ss;
+  string annotations_path, imagesets_path;
+
+  ss << "mkdir " << dir << "_" << date_str;
+  printf("%s\n", ss.str().c_str());
+  system(ss.str().c_str());
+
+  ss.str("");
+  ss << dir << "_" << date_str << "/Annotations";
+  annotations_path = ss.str();
+  ss.str("");
+  ss << "mkdir " << annotations_path; 
+  printf("%s\n", ss.str().c_str());
+  system(ss.str().c_str());
+
+  ss.str("");
+  ss << dir << "_" << date_str << "/ImageSets";
+  imagesets_path = ss.str();
+  ss.str("");
+  ss << "mkdir " << imagesets_path; 
+  printf("%s\n", ss.str().c_str());
+  system(ss.str().c_str());
+
+  printf("csv lines %i, num scallop params %i\n",
+	 scallop_csv_lines.size(), scallop_params_vect.size());
+
+  // filter
+  
+  int i, scallop_idx;
+
+  scallop_traintest.clear();
+
+  //  for (i = 0, scallop_idx = 0; i < scallop_params_vect.size(); i++) {
+  for (int i = 0; i < scallop_csv_lines.size(); i++) {
+
+    map<int, int>::iterator iter = scallop_line_idx_idx_map.find(i);
+    if (iter != scallop_line_idx_idx_map.end()) {
+      ScallopParams scparams = scallop_params_vect[(*iter).second];
+
+      //    ScallopParams scparams = scallop_params_vect[i];
+      if (filter_for_traintest_scallop(scparams)) {
+
+	if (!getScallopSignature(scallop_csv_lines[i], image_sig)) {
+	  printf("loadScallopMap(): problem parsing signature on line %i\n", i);
+	  exit(1);
+	}
+
+	/*
+	printf("line start %s\n", scallop_csv_lines[i].c_str());
+	printf("line end %s\n", scallop_csv_line_endings[i].c_str());
+	printf("sig %s\n", image_sig.c_str());
+	printf("%i, %i, %i, %i, %i\n",
+	       scallop_idx,
+	       scparams.p_upper_left.x, scparams.p_upper_left.y,
+	       scparams.p_lower_right.x, scparams.p_lower_right.y);
+	printf("\n");
+	*/
+	
+	scallop_idx++;
+
+	scallop_traintest.push_back(make_pair(image_sig, scparams));
+	
+      }
+    }
+  }
+
+  // make set of images containing filtered scallops
+
+  for (int i = 0; i < scallop_traintest.size(); i++)     
+    image_sig_set.insert(scallop_traintest[i].first);
+
+  // move over to vector and randomize
+  
+  set <string>::iterator iter;
+
+  for (iter = image_sig_set.begin(); iter != image_sig_set.end(); iter++)     
+    image_sig_vect.push_back(*iter);
+
+  random_shuffle(image_sig_vect.begin(), image_sig_vect.end());
+
+  //  printf("scallop_traintest size %i, image_sig_set %i\n", scallop_traintest.size(), image_sig_set.size());
+
+  // we need to do this by image, not scallop
+  // make a set of image sigs, vectorize it, shuffle it, and then find the scallops that belong to each image and construct an xml for that image
+  
+  // remember to deal with scaling
+
+  int num_training = (int) rint(training_fraction * (float) image_sig_vect.size());
+    
+  // write it
+
+  string dir_name = string("scallop_data_") + date_str;
+
+  int num_train_scallops = 0;
+  int num_test_scallops = 0;
+
+  FILE *ann_fp = stdout;
+  char *ann_filename = (char *) malloc(sizeof(char)*512);
+  
+  FILE *imsets_fp = stdout;
+  char *imsets_filename = (char *) malloc(sizeof(char)*512);
+
+  FILE *imcopy_fp;
+  char *imcopy_filename = (char *) malloc(sizeof(char)*512);
+
+  ss.str("");
+  ss << dir << "_" << date_str;
+
+  sprintf(imcopy_filename, "%s/imcopy.sh", ss.str().c_str());
+  imcopy_fp = fopen(imcopy_filename, "w");
+  fprintf(imcopy_fp, "mkdir ./JPEGImages\n");
+  
+  for (int i = 0; i < image_sig_vect.size(); i++) {
+
+    // image copy command -- so we only get the relevant images
+
+    fprintf(imcopy_fp, "cp ~/Documents/data/scallops/images/%s.jpg JPEGImages/%06i.jpg\n",
+	    image_sig_vect[i].c_str(), i);
+    
+    // train or test?
+    
+    if (i == 0) {
+      sprintf(imsets_filename, "%s/train.txt", imagesets_path.c_str());
+      imsets_fp = fopen(imsets_filename, "w");
+    }
+    else if (i == num_training) {
+      fclose(imsets_fp);
+      sprintf(imsets_filename, "%s/test.txt", imagesets_path.c_str());
+      imsets_fp = fopen(imsets_filename, "w");
+    }
+
+    fprintf(imsets_fp, "%06i\n", i);
+
+    // annotation data
+    
+    sprintf(ann_filename, "%s/%06i.xml", annotations_path.c_str(), i);
+    printf("%s\n", ann_filename);
+    ann_fp = fopen(ann_filename, "w"); 
+    
+    fprintf(ann_fp, "<annotation>\n");
+    //    fprintf(ann_fp, "  <folder>scallops</folder>\n");
+    fprintf(ann_fp, "  <folder>%s</folder>\n", dir_name.c_str());
+    fprintf(ann_fp, "  <filename>%s.jpg</filename>\n", image_sig_vect[i].c_str());
+
+
+    /*
+    if (i < num_training) 
+      fprintf(ann_fp, "train/%06i, %s\n", i, image_sig_vect[i].c_str());
+    else 
+      fprintf(ann_fp, "test/%06i, %s\n", i - num_training, image_sig_vect[i].c_str());
+    */
+    
+    for (int j = 0; j < scallop_traintest.size(); j++) {
+      string scallop_image_sig = scallop_traintest[j].first;
+      if (scallop_image_sig == image_sig_vect[i])  {
+
+	fprintf(ann_fp, "  <object>\n");
+	fprintf(ann_fp, "    <name>scallop</name>\n");
+	fprintf(ann_fp, "    <pose>Frontal</pose>\n");
+	fprintf(ann_fp, "    <truncated>0</truncated>\n");
+	fprintf(ann_fp, "    <difficult>0</difficult>\n");
+	fprintf(ann_fp, "    <bndbox>\n");
+
+	ScallopParams scparams = scallop_traintest[j].second;
+	fprintf(ann_fp, "      <xmin>%i</xmin>\n", scparams.p_upper_left.x);
+	fprintf(ann_fp, "      <ymin>%i</ymin>\n", scparams.p_upper_left.y);
+	fprintf(ann_fp, "      <xmax>%i</xmax>\n", scparams.p_lower_right.x);
+	fprintf(ann_fp, "      <ymax>%i</ymax>\n", scparams.p_lower_right.y);
+	
+	if (i < num_training)
+	  num_train_scallops++;
+	else
+	  num_test_scallops++;
+
+	fprintf(ann_fp, "    </bndbox>\n");
+	fprintf(ann_fp, "  </object>\n");
+
+      }
+    }
+    fprintf(ann_fp, "</annotation>\n");
+
+    fclose(ann_fp);
+  }
+
+  fclose(imsets_fp);
+  fclose(imcopy_fp);
+
+  printf("%i training images (%i scallops), %i test images (%i scallops)\n", num_training, num_train_scallops, image_sig_vect.size() - num_training, num_test_scallops); 
+
+}
+//----------------------------------------------------------------------------
+
 void saveScallopMap()
 {
   int no_params_total = 0;
@@ -5976,6 +6313,9 @@ void saveScallopMap()
 //----------------------------------------------------------------------------
 
 // THIS IS A FISH!!! problem at 1389 ./scallop_data/images/frame004911_1436666595_247114.jpg
+// i changed this manually to Fish in hunter_data.csv and scale_data.csv
+// we will take only live scallops that are completely inside the image -- every corner >= 10 pixel
+// from image edges
 
 int loadScallopMap(bool is_hunter)
 {
