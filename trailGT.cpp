@@ -5079,6 +5079,13 @@ void onKeyPress(char c, bool print_help)
     }
   }
 
+  if (c == 'j') {
+
+    if (object_input_mode == SCALLOP_MODE) {
+      imwrite("prediction.png", draw_im);
+    }
+  }
+  
   // write traintest
 
   if (c == 'T' || print_help) {
@@ -5240,6 +5247,8 @@ void scallop_draw_overlay()
 
     ss << "SCALLOP " << current_index << ": " << imsig; // current_imname;
     string str = ss.str();
+
+    printf("%s\n", str.c_str());
     
     putText(draw_im, str, Point(5, 10), FONT_HERSHEY_SIMPLEX, fontScale, Scalar::all(255), 1, 8);
     
