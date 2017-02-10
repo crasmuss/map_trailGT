@@ -5025,6 +5025,9 @@ void onKeyPress(char c, bool print_help)
 	if (do_verts)
 	  do_random = false;
       }
+      else {
+	printf("must be on a trail vert image to toggle verts-only mode\n");
+      }
     }
   }
 
@@ -5248,7 +5251,7 @@ void scallop_draw_overlay()
     ss << "SCALLOP " << current_index << ": " << imsig; // current_imname;
     string str = ss.str();
 
-    printf("%s\n", str.c_str());
+    //    printf("%s\n", str.c_str());
     
     putText(draw_im, str, Point(5, 10), FONT_HERSHEY_SIMPLEX, fontScale, Scalar::all(255), 1, 8);
     
@@ -5304,6 +5307,10 @@ void tree_draw_overlay()
 
     putText(draw_im, str, Point(5, 10), FONT_HERSHEY_SIMPLEX, fontScale, Scalar::all(255), 1, 8);
 
+    // are we in "verts only" mode?
+
+    if (do_verts) 
+      putText(draw_im, "V", Point(25, 40), FONT_HERSHEY_SIMPLEX, fontScale, Scalar(0, 0, 255), 1, 8);
 
     // horizontal lines for trail edge rows
     
@@ -6001,7 +6008,7 @@ void compute_stats_traintest_scallop()
   set < string > image_sig_set;
 
   printf("csv lines %i, num scallop params %i\n",
-	 scallop_csv_lines.size(), scallop_params_vect.size());
+	 (int) scallop_csv_lines.size(), (int) scallop_params_vect.size());
 
   // filter
   
@@ -6107,7 +6114,7 @@ void write_traintest_scallop(string dir, float training_fraction)
   system(ss.str().c_str());
 
   printf("csv lines %i, num scallop params %i\n",
-	 scallop_csv_lines.size(), scallop_params_vect.size());
+	 (int) scallop_csv_lines.size(), (int) scallop_params_vect.size());
 
   // filter
   
@@ -6270,7 +6277,7 @@ void write_traintest_scallop(string dir, float training_fraction)
   fclose(imsets_fp);
   fclose(imcopy_fp);
 
-  printf("%i training images (%i scallops), %i test images (%i scallops)\n", num_training, num_train_scallops, image_sig_vect.size() - num_training, num_test_scallops); 
+  printf("%i training images (%i scallops), %i test images (%i scallops)\n", num_training, num_train_scallops, (int) image_sig_vect.size() - num_training, num_test_scallops); 
 
 }
 //----------------------------------------------------------------------------
@@ -7089,11 +7096,20 @@ int main( int argc, const char** argv )
   // command-line options?
 
   if (argc == 2) {
-    if (!strcmp(argv[1], "help")) {
+    if (!strcmp(argv[1], "tree") || !strcmp(argv[1], "-tree")) {
+      object_input_mode = TREE_MODE;
+    }
+    else if (!strcmp(argv[1], "trail") || !strcmp(argv[1], "-trail")) {
+      object_input_mode = TRAIL_MODE;
+    }
+    else if (!strcmp(argv[1], "scallop") || !strcmp(argv[1], "-scallop")) {
+      object_input_mode = SCALLOP_MODE;
+    }
+    else if (!strcmp(argv[1], "help")) {
       onKeyPress('=', true);
       exit(1);
     }
-    if (!strcmp(argv[1], "zmax")) {
+    else if (!strcmp(argv[1], "zmax")) {
       zmax();
       exit(1);
     }
@@ -7113,7 +7129,8 @@ int main( int argc, const char** argv )
       //annotate_dynamics(false);
       exit(1);
     }
-    s_imagedirs = string(argv[1]);
+    else
+      s_imagedirs = string(argv[1]);
   }
 
   // proceed
@@ -7145,22 +7162,30 @@ int main( int argc, const char** argv )
 
   // trail stuff -- commented out to work on trees
   
-  /*
-  total = loadBadMap();
-  printf("bad: %i current, %i external = %i total\n", (int) Bad_idx_set.size(), (int) External_bad_sig_vect.size(), total);
+  if (object_input_mode == TRAIL_MODE || object_input_mode == TREE_MODE) {
 
-  Vert.resize(Random_idx.size());
-  ClosestVert_dist.resize(Random_idx.size());   
+    total = loadBadMap();
+    printf("bad: %i current, %i external = %i total\n", (int) Bad_idx_set.size(), (int) External_bad_sig_vect.size(), total);
+    
+    Vert.resize(Random_idx.size());
+    ClosestVert_dist.resize(Random_idx.size());   
+    
+    total = loadVertMap();
+    num_saved_verts = Vert_idx_set.size();
+    printf("vert: %i current, %i external = %i total\n", (int) Vert_idx_set.size(), (int) External_vert_vect.size(), total);
+  }
 
-  total = loadVertMap();
-  num_saved_verts = Vert_idx_set.size();
-  printf("vert: %i current, %i external = %i total\n", (int) Vert_idx_set.size(), (int) External_vert_vect.size(), total);
-  */
+  else if (object_input_mode == SCALLOP_MODE) {
+    total = loadScallopMap(true);
+    loadScallopMap(false);
+  }
 
-  total = loadScallopMap(true);
-  loadScallopMap(false);
-  
-  set_current_index(ZERO_INDEX);
+  if (object_input_mode == TREE_MODE) {
+    set_current_index(*Vert_idx_set.begin());
+    do_verts = true;
+  }
+  else 
+    set_current_index(ZERO_INDEX);
 
   // display
 
