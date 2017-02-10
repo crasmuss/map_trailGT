@@ -103,6 +103,7 @@ void saveVertVectNoParens(FILE *, VertVect &);
 void saveScallopMap(); int loadScallopMap();
 int loadScallopMap(bool);
 void write_traintest_scallop(string = "/tmp/scallop_data", float = 0.8);
+void print_filter_stats_scallop();
 void compute_stats_traintest_scallop();
 bool filter_for_traintest_scallop(ScallopParams &);
 
@@ -223,6 +224,8 @@ vector <TreeVect>  Trees;   // actual tree info for each image
 
 set <int> Tree_idx_set;          // which images have tree info
 set <int> NoTree_idx_set;        // which images do NOT have tree info (Tree U NoTree = all images)
+
+multimap<int, TreeParams> Tree_idx_params_map;
 
 //-------------------------------------------------------------------
 
@@ -4633,8 +4636,9 @@ Point p_width;
       t.dy = -tree_dx_ortho;
       t.width = 2.0 * p_tree_width_val;
       print_treeparams(stdout, t);
-
+ 
       printf("inserting tree at image %i\n", current_index);
+      Tree_idx_params_map.insert(pair<int, TreeParams>(current_index, t));
       Tree_idx_set.insert(current_index);
 
       editing_tree = false;
@@ -4907,9 +4911,13 @@ void onKeyPress(char c, bool print_help)
 
     if (print_help) 
       printf("F = filter for traintest\n");
-    else
-      filter_for_traintest();
-
+    else {
+      if (object_input_mode == TRAIL_MODE) 
+	filter_for_traintest();
+      else if (object_input_mode == SCALLOP_MODE) {
+	print_filter_stats_scallop();
+      }
+    }
   }
 
   // goto next image in sequence
@@ -5252,8 +5260,9 @@ void scallop_draw_overlay()
     string str = ss.str();
 
     //    printf("%s\n", str.c_str());
-    
-    putText(draw_im, str, Point(5, 10), FONT_HERSHEY_SIMPLEX, fontScale, Scalar::all(255), 1, 8);
+
+    float scale_factor = 2.0;
+    putText(draw_im, str, Point(scale_factor*5, scale_factor*10), FONT_HERSHEY_SIMPLEX, scale_factor*fontScale, Scalar::all(255), 1, 8);
     
     // iterate through all scallops...
     
@@ -5316,6 +5325,20 @@ void tree_draw_overlay()
     
     for (int i = 0; i < trailEdgeRow.size(); i++) 
       line(draw_im, Point(0, trailEdgeRow[i]), Point(current_im.cols - 1, trailEdgeRow[i]), Scalar(0, 128, 128), 1);
+
+    // useful multimap example here: http://www.yolinux.com/TUTORIALS/CppStlMultiMap.html
+    // next step is to print only the trees in *this* image
+    // then draw 'em!
+    
+    printf("tree count = %i\n", Tree_idx_params_map.size());
+
+    for (multimap<int, TreeParams>::iterator it = Tree_idx_params_map.begin(); it != Tree_idx_params_map.end(); ++it) {
+      printf("%i:\n", (*it).first);
+      print_treeparams(stdout, (*it).second);
+    }
+ 
+
+    //Tree_idx_params_map.insert(pair<int, TreeParams>(current_index, t));
 
   }
 }
@@ -5979,8 +6002,46 @@ bool getScallopSignature(string s, string & sig)
 
 //----------------------------------------------------------------------------
 
+bool has_scale_filter_for_traintest_scallop(ScallopParams & scparams)
+{
+  return scparams.has_scale;
+}
+
+//----------------------------------------------------------------------------
+
+bool alive_filter_for_traintest_scallop(ScallopParams & scparams)
+{
+  return scparams.type == SCALLOP_ALIVE_TYPE;
+}
+
+//----------------------------------------------------------------------------
+
+bool far_enough_from_edge_filter_for_traintest_scallop(ScallopParams & scparams)
+{
+  int min_edge_dist = 10;
+
+  if (scparams.p_upper_left.x < min_edge_dist || scparams.p_lower_right.x < min_edge_dist ||
+      scparams.p_upper_left.x >= (SCALLOP_IMAGE_WIDTH - min_edge_dist) || scparams.p_lower_right.x >= (SCALLOP_IMAGE_WIDTH - min_edge_dist))
+    return false;
+  if (scparams.p_upper_left.y < min_edge_dist || scparams.p_lower_right.y < min_edge_dist || 
+      scparams.p_upper_left.y >= (SCALLOP_IMAGE_HEIGHT - min_edge_dist) || scparams.p_lower_right.y >= (SCALLOP_IMAGE_HEIGHT - min_edge_dist))
+    return false;
+
+  return true;
+}
+
+//----------------------------------------------------------------------------
+
 bool filter_for_traintest_scallop(ScallopParams & scparams)
 {
+  if (!has_scale_filter_for_traintest_scallop(scparams))
+    return false;
+  if (!alive_filter_for_traintest_scallop(scparams))
+    return false;
+  //  if (!far_enough_from_edge_filter_for_traintest_scallop(scparams))
+  //   return false;
+
+  /*
   int min_edge_dist = 10;
 
   if (!scparams.has_scale)
@@ -5993,6 +6054,7 @@ bool filter_for_traintest_scallop(ScallopParams & scparams)
   if (scparams.p_upper_left.y < min_edge_dist || scparams.p_lower_right.y < min_edge_dist || 
       scparams.p_upper_left.y >= (SCALLOP_IMAGE_HEIGHT - min_edge_dist) || scparams.p_lower_right.y >= (SCALLOP_IMAGE_HEIGHT - min_edge_dist))
     return false;
+  */
   
   return true;
 }
@@ -6079,6 +6141,68 @@ void compute_stats_traintest_scallop()
   float h_mean = (float) h_total / (float) scallop_idx;
   float aspect_mean = w_mean / h_mean;
   printf("w mean = %.2f, h mean = %.2f, aspect mean = %.2f\n", w_mean, h_mean, aspect_mean);
+}
+
+//----------------------------------------------------------------------------
+
+void print_filter_stats_scallop()
+{
+  int i;
+  int num_total = 0;
+  int num_passed_scale_filter = 0;
+  int num_passed_alive_filter = 0;
+  int num_passed_edge_filter = 0;
+  int num_passed_filter = 0;
+  int num_alive_but_too_close = 0;
+  
+  for (int i = 0; i < scallop_csv_lines.size(); i++) {
+
+    map<int, int>::iterator iter = scallop_line_idx_idx_map.find(i);
+    if (iter != scallop_line_idx_idx_map.end()) {
+      ScallopParams scparams = scallop_params_vect[(*iter).second];
+
+      num_total++;
+      
+      if (has_scale_filter_for_traintest_scallop(scparams))
+	num_passed_scale_filter++;
+      if (alive_filter_for_traintest_scallop(scparams)) {
+	num_passed_alive_filter++;
+	if (!far_enough_from_edge_filter_for_traintest_scallop(scparams))
+	  num_alive_but_too_close++;
+      }
+
+      if (filter_for_traintest_scallop(scparams)) {
+
+	num_passed_filter++;
+
+	/*
+	if (!getScallopSignature(scallop_csv_lines[i], image_sig)) {
+	  printf("loadScallopMap(): problem parsing signature on line %i\n", i);
+	  exit(1);
+	}
+	*/
+	
+	/*
+	printf("line start %s\n", scallop_csv_lines[i].c_str());
+	printf("line end %s\n", scallop_csv_line_endings[i].c_str());
+	printf("sig %s\n", image_sig.c_str());
+	printf("%i, %i, %i, %i, %i\n",
+	       scallop_idx,
+	       scparams.p_upper_left.x, scparams.p_upper_left.y,
+	       scparams.p_lower_right.x, scparams.p_lower_right.y);
+	printf("\n");
+	*/
+	
+	//	scallop_idx++;
+
+	//	scallop_traintest.push_back(make_pair(image_sig, scparams));
+	
+      }
+    }
+  }
+
+  printf("%i passed filter out of %i total\n", num_passed_filter, num_total);
+  printf("%i with scale, %i alive, %i alive but too close to edge\n", num_passed_scale_filter, num_passed_alive_filter, num_alive_but_too_close);
 }
 
 //----------------------------------------------------------------------------
