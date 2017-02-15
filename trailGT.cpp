@@ -89,6 +89,10 @@ void trail_onMouse(int, int, int, int, void *);
 void tree_draw_overlay();
 void tree_onMouse(int, int, int, int, void *);
 
+void saveTreeVertMultiMap(); int loadTreeVertMultiMap();
+
+void write_traintest_tree(string = "/tmp/tree_data", float = 0.8);
+
 void scallop_draw_overlay();
 void scallop_onMouse(int, int, int, int, void *);
 
@@ -4403,6 +4407,80 @@ void print_treeparams(FILE *fp, TreeParams & t)
 
 //----------------------------------------------------------------------------
 
+void draw_treeparams(Mat & draw_im, TreeParams & t, int r, int g, int b)
+{
+  Point p_center_inter;
+  float scale_factor = RAY_DELTA_THRESH + 1.0;
+  
+  Point p_tree_bottom = t.v_bottom;
+  Point p_top_center = Point(t.v_bottom.x + scale_factor * t.dx, t.v_bottom.y + scale_factor * t.dy);
+  float p_tree_width_val = 0.5 * t.width;
+  float tree_dx_ortho, tree_dy_ortho;
+  Point p_left_inter, p_right_inter;
+  
+  // centerline
+  
+  if (ray_image_boundaries_intersection(p_tree_bottom, p_top_center, RAY_DELTA_THRESH, p_center_inter)) 
+    line(draw_im, p_tree_bottom, p_center_inter, Scalar(r, g, b), 1);
+
+  tree_dx_ortho = p_top_center.x - p_tree_bottom.x;
+  tree_dy_ortho = p_top_center.y - p_tree_bottom.y;
+  double temp = tree_dx_ortho;
+  tree_dx_ortho = -tree_dy_ortho;
+  tree_dy_ortho = temp;
+  double len = sqrt(tree_dx_ortho*tree_dx_ortho + tree_dy_ortho*tree_dy_ortho);
+  tree_dx_ortho /= len;
+  tree_dy_ortho /= len;
+  
+  int idx = (int) rint(p_tree_width_val * tree_dx_ortho);
+  int idy = (int) rint(p_tree_width_val * tree_dy_ortho);
+  
+  Point p_bottom_right = Point(p_tree_bottom.x + idx, p_tree_bottom.y + idy);
+  Point p_bottom_left = Point(p_tree_bottom.x - idx, p_tree_bottom.y - idy);
+  
+  line(draw_im, p_bottom_left, p_bottom_right, Scalar(r, g, b), 1);
+  
+  // need to draw sides
+  
+  Point p_upper_right = Point(p_top_center.x + idx, p_top_center.y + idy);
+  Point p_upper_left = Point(p_top_center.x - idx, p_top_center.y - idy);
+  
+  if (ray_image_boundaries_intersection(p_bottom_left, p_upper_left, RAY_DELTA_THRESH, p_left_inter)) 
+    //      line(draw_im, p_bottom_left, p_left_inter, Scalar(3*r/4, 3*g/2, 3*b/4), 1);
+    line(draw_im, p_bottom_left, p_left_inter, Scalar(r, g, b), 1);
+  
+  if (ray_image_boundaries_intersection(p_bottom_right, p_upper_right, RAY_DELTA_THRESH, p_right_inter)) 
+    //      line(draw_im, p_bottom_right, p_right_inter, Scalar(3*r/4, 3*g/4, 3*b/4), 1);
+    line(draw_im, p_bottom_right, p_right_inter, Scalar(r, g, b), 1);
+  
+  /*
+  if (p_tree_inter_result)
+    line(draw_im, p_tree_upper, p_tree_inter, Scalar(255, 255, 0), 1);
+  if (p_tree_have_direction) {
+    //      printf("%lf\n", p_tree_width_val);
+    Point p_bottom_right = Point(p_tree_bottom.x + idx, p_tree_bottom.y + idy);
+    Point p_upper_right = Point(p_tree_upper.x + idx, p_tree_upper.y + idy);
+    line(draw_im, p_tree_bottom, p_bottom_right, Scalar(0, 0, 255), 1);
+    line(draw_im, p_upper_right, p_bottom_right, Scalar(0, 0, 255), 1);
+    Point p_bottom_left = Point(p_tree_bottom.x - idx, p_tree_bottom.y - idy);
+    Point p_upper_left = Point(p_tree_upper.x - idx, p_tree_upper.y - idy);
+    line(draw_im, p_tree_bottom, p_bottom_left, Scalar(255, 0, 0), 1);
+    line(draw_im, p_upper_left, p_bottom_left, Scalar(255, 0, 0), 1);
+    
+    Point p_right_inter, p_left_inter;
+    
+    if (ray_image_boundaries_intersection(p_bottom_right, p_upper_right, RAY_DELTA_THRESH, p_right_inter))
+      line(draw_im, p_upper_right, p_right_inter, Scalar(255, 0, 255), 1);
+
+    if (ray_image_boundaries_intersection(p_bottom_left, p_upper_left, RAY_DELTA_THRESH, p_left_inter))
+      line(draw_im, p_upper_left, p_left_inter, Scalar(255, 0, 255), 1);
+    
+  }
+  */
+}
+
+//----------------------------------------------------------------------------
+
 // SCALLOP MODE: what to do when mouse is moved/mouse button is push/released
 
 void scallop_onMouse(int event, int x, int y, int flags, void *userdata)
@@ -4575,7 +4653,7 @@ Point p_width;
       
       if (editing_tree) {
 
-	      // we have a valid trunk direction
+	// we have a valid trunk direction
       
 	if (p_tree_inter_result) {
 	  tree_dx_ortho = p_tree_upper.x - p_tree_bottom.x;
@@ -5081,8 +5159,11 @@ void onKeyPress(char c, bool print_help)
     else {
 
       if (object_input_mode == TRAIL_MODE) {
-	saveBadMap();
-	saveVertMap();
+	//saveBadMap();
+	//saveVertMap();
+      }
+      else if (object_input_mode == TREE_MODE) {
+	saveTreeVertMultiMap();
       }
       else if (object_input_mode == SCALLOP_MODE) {
 	saveScallopMap();
@@ -5104,6 +5185,7 @@ void onKeyPress(char c, bool print_help)
       printf("T = write traintest for localization\n");
     else {
       if (object_input_mode == TRAIL_MODE) {
+	/*
 	//    write_traintest_vanilla_grayscale();
 #ifdef OUTPUT_CHOCOLATE_DATA
 	write_traintest_chocolate_color();
@@ -5115,9 +5197,13 @@ void onKeyPress(char c, bool print_help)
 	printf("undefined output data type\n");
 	exit(1);
 #endif
+	*/
       }
       else if (object_input_mode == SCALLOP_MODE) {
 	write_traintest_scallop();
+      }
+      else if (object_input_mode == TREE_MODE) {
+	write_traintest_tree();
       }
     }
   }
@@ -5329,15 +5415,26 @@ void tree_draw_overlay()
     // useful multimap example here: http://www.yolinux.com/TUTORIALS/CppStlMultiMap.html
     // next step is to print only the trees in *this* image
     // then draw 'em!
-    
-    printf("tree count = %i\n", Tree_idx_params_map.size());
 
-    for (multimap<int, TreeParams>::iterator it = Tree_idx_params_map.begin(); it != Tree_idx_params_map.end(); ++it) {
-      printf("%i:\n", (*it).first);
-      print_treeparams(stdout, (*it).second);
+    // how many trees in entire dataset
+    //    printf("tree count = %i\n", Tree_idx_params_map.size());
+
+    //    printf("============================================= \n");
+    pair<multimap<int, TreeParams>::iterator, multimap<int, TreeParams>::iterator> ppp;
+
+    ppp = Tree_idx_params_map.equal_range(current_index);
+
+    for (multimap<int, TreeParams>::iterator it2 = ppp.first; it2 != ppp.second; ++it2) {
+      //    printf("%i: ", (*it2).first);
+      // print_treeparams(stdout, (*it2).second);
+      // draw here instead of print
+      draw_treeparams(draw_im, (*it2).second, 255, 0, 255);
+
+      // need mechanism to erase and edit existing trees
+      
+      // also want a way to read in trail traintest image indices and only be on them -- this is a smaller set than the images with trail verts
     }
- 
-
+    
     //Tree_idx_params_map.insert(pair<int, TreeParams>(current_index, t));
 
   }
@@ -5569,6 +5666,37 @@ void saveVertVectNoParens(FILE *fp, VertVect & V)
 
 //----------------------------------------------------------------------------
 
+// write all current ground-truth tree params to file, **mapped by filename signature rather than index**
+// filename signature should start with DATETIME directory
+
+void saveTreeVertMultiMap()
+{
+  FILE *fp = fopen("treevertmultimap.txt", "w");
+  set <string> tree_sig_set;
+  int num_trees = 0;
+  
+  // new trees
+    
+  for (multimap<int, TreeParams>::iterator it = Tree_idx_params_map.begin(); it != Tree_idx_params_map.end(); ++it) {
+    int i = (*it).first;
+    //    printf("%i:\n", i);
+    tree_sig_set.insert(Idx_signature_vect[i]);
+    fprintf(fp, "%s, ", Idx_signature_vect[i].c_str());
+    print_treeparams(fp, (*it).second);
+
+    num_trees++;
+  }
+
+  // old trees...???
+
+  fclose(fp);
+
+  printf("saved %i trees from %i images\n", num_trees, (int) tree_sig_set.size());
+
+}
+
+//----------------------------------------------------------------------------
+
 // write all current ground-truth trail vertices to file, **mapped by filename signature rather than index**
 // filename signature should start with DATETIME directory
 
@@ -5700,16 +5828,18 @@ bool getNextSignature(string s, int startPos, int & curPos, string & nextSig)
       endpos = s.find("jpg");
       if (endpos != std::string::npos) {
 	curPos = endpos + 3;
-	nextSig = s.substr(pos, curPos);
-	//	printf("sig: %s\n", nextSig.c_str());
+	//	nextSig = s.substr(pos, curPos);
+	nextSig = s.substr(pos, curPos - pos);
+	//printf("jpg sig: %s\n", nextSig.c_str());
 	return true;
       }
       else {
 	endpos = s.find("png");
 	if (endpos != std::string::npos) {
 	  curPos = endpos + 3;
-	  nextSig = s.substr(pos, curPos);
-	  //	  printf("sig: %s\n", nextSig.c_str());
+	  //	  nextSig = s.substr(pos, curPos);
+	  nextSig = s.substr(pos, curPos - pos);
+	  //printf("png sig: %s\n", nextSig.c_str());
 	  return true;
 	}
       }
@@ -5839,12 +5969,35 @@ int most_isolated_nonvert_image_idx()
 
 //----------------------------------------------------------------------------
 
+// read tree params from string line starting at line_idx into
+
+void loadTreeParams(string & line, int line_idx, TreeParams & T)
+{
+  /*
+    fprintf(fp, "%i, %i, %.3f, %.3f, %.2f\n",
+	  t.v_bottom.x, t.v_bottom.y,
+	  t.dx, t.dy,
+	  t.width);
+  */
+
+  char *s = new char[line.length()+1];
+  strcpy (s, line.substr(line_idx, string::npos).c_str());
+
+  //  char *s = line.substr(line_idx, string::npos).c_str();
+  //  printf("str %s\n", line.substr(line_idx, string::npos).c_str());
+  //  printf("charp %s\n", s);
+  sscanf(s, ", %i, %i, %f, %f, %f", &T.v_bottom.x, &T.v_bottom.y, &T.dx, &T.dy, &T.width);
+  print_treeparams(stdout, T);
+}
+
+//---------------------------------------------------------------------------- 
+
 // read all verts from string line starting at line_idx into V
 
 void loadVertVect(string & line, int line_idx, VertVect & V)
 {
   int x_val, y_val;
-  Point v;
+Point v;
 
   while (getNextVert(line, line_idx, line_idx, x_val, y_val)) {
 
@@ -6614,6 +6767,166 @@ int loadScallopMap(bool is_hunter)
 
 // dataset should already be loaded
 
+int loadTreeVertMultiMap()
+{
+  ifstream inStream;
+  string line, image_sig;
+  int line_idx;
+  int total = 0;
+  
+  inStream.open("treevertmultimap.txt");
+
+  while (getline(inStream, line)) {
+
+    // skip comments
+
+    if (line[0] == COMMENT_CHAR)
+      continue;
+
+    // get image signature
+
+    if (!getNextSignature(line, 0, line_idx, image_sig)) {
+      printf("loadTreeVertMultiMap(): problem parsing signature on line %i\n", total);
+      exit(1);
+    }
+
+    printf("nextsig = %s\n", image_sig.c_str());
+
+    TreeParams T;
+    
+    // read params
+
+    loadTreeParams(line, line_idx, T);
+
+    // look up index of image sig and add to multimap
+
+    map<string, int>::iterator iter = Signature_idx_map.find(image_sig);
+    
+    if (iter != Signature_idx_map.end()) {
+      int image_idx = (*iter).second;
+      printf("inserting tree at image %i\n", image_idx);
+      Tree_idx_params_map.insert(pair<int, TreeParams>(image_idx, T));
+      Tree_idx_set.insert(image_idx);
+    }
+    else 
+      printf("image sig not found\n");
+      
+    total++;
+  }
+
+  inStream.close();
+
+  return total;
+}
+
+//----------------------------------------------------------------------------
+
+void write_traintest_tree(string dir, float training_fraction)
+{
+
+}
+
+//----------------------------------------------------------------------------
+
+void intersectVertMap(string traintest_filename)
+{
+  ifstream inStream;
+  string line;
+  int line_idx;
+  string image_sig;
+  int num_lines = 0;
+  map<string, int>::iterator iter;
+  int image_idx;
+  int num_found = 0;
+  int num_notfound = 0;
+  set <string> traintest_sig_set;
+  
+  printf("intersect %s\n", traintest_filename.c_str());
+
+  inStream.open(traintest_filename.c_str());
+
+  while (getline(inStream, line)) {
+
+    // get image signature
+    
+    if (!getNextSignature(line, 0, line_idx, image_sig)) {
+      printf("intersectVertMap(): problem parsing signature on line %i\n", num_lines);
+      exit(1);
+    }
+
+    //    printf("%s\n", image_sig.c_str());
+
+    traintest_sig_set.insert(image_sig);
+    
+    // is it in our current dataset?
+
+    iter = Signature_idx_map.find(image_sig);
+
+    if (iter != Signature_idx_map.end()) {
+      image_idx = (*iter).second;
+      //      printf("found at idx %i\n", (*iter).second);
+      num_found++;
+    }
+    else {
+      printf("%s NOT found at idx %i\n", image_sig.c_str(), (*iter).second);
+      num_notfound++;
+    }
+    
+    num_lines++;
+  }
+
+  //  printf("%i lines [%i found, %i not]\n", num_lines, num_found, num_notfound);
+  printf("%i in set\n", (int) traintest_sig_set.size());
+  printf("%i found, %i not found\n", num_found, num_notfound);
+
+  // iterate through Vert_idx_set, if corresponding sig is not in traintest_sig_set,
+  // remove it from Vert_idx_set and add to NoVert_idx_set
+
+  set<int>::iterator idx_iter, idx_iter_next;
+  set<string>::iterator sig_iter;
+
+  int num_to_remove = 0;
+
+  printf("%i verts, %i no verts (original size)\n", Vert_idx_set.size(), NoVert_idx_set.size());
+  
+  //  for (idx_iter = Vert_idx_set.begin(); idx_iter != Vert_idx_set.end(); idx_iter++) {
+  idx_iter = Vert_idx_set.begin();
+  while (idx_iter != Vert_idx_set.end()) {
+
+    sig_iter = traintest_sig_set.find(Idx_signature_vect[*idx_iter]);
+
+    if (sig_iter == traintest_sig_set.end()) {
+      //      printf("%i %s\n", *idx_iter, Idx_signature_vect[*idx_iter].c_str());
+      num_to_remove++;
+
+      idx_iter_next = idx_iter;
+      idx_iter_next++;
+      Vert_idx_set.erase(idx_iter);
+      idx_iter = idx_iter_next;
+
+      NoVert_idx_set.insert(*idx_iter);
+    }
+    else 
+      idx_iter++;
+
+  }
+
+  printf("%i verts, %i no verts (final size) -- %i removed/added\n", Vert_idx_set.size(), NoVert_idx_set.size(), num_to_remove);
+  
+
+  /*
+  for (iter = Signature_idx_map.begin(); iter != Signature_idx_map.end(); iter++) {
+    printf("%s\n", (*iter).first.c_str());
+  }
+  */
+}
+
+//----------------------------------------------------------------------------
+
+// get all ground-truth trail vertices from **MAP** file
+
+// dataset should already be loaded
+
 int loadVertMap()
 {
   ifstream inStream;
@@ -6902,7 +7215,7 @@ bool ray_line_segment_intersection(Point p1, Point p2, Point p1_prime, Point p2_
     //    printf("u %lf\n", u);
     
     if (u <= 0.0) {  // only one inequality for a ray, vs. two for line segment -> "|| u > 1.0") {   // >=
-      //    printf("fail A: %lf\n", u);
+      //      printf("fail A: %lf\n", u);
       return false;
     }
 
@@ -6955,7 +7268,7 @@ bool ray_line_segment_intersection(Point p1, Point p2, Point p1_prime, Point p2_
 bool ray_image_boundaries_intersection(Point p1, Point p2, double delta_thresh, Point & p_inter)
 {
   bool result;
-  
+
   result = ray_line_segment_intersection(p1, p2, p_topleft, p_topright, RAY_DELTA_THRESH, p_inter);
   if (!result) { 
     result = ray_line_segment_intersection(p1, p2, p_topleft, p_bottomleft, RAY_DELTA_THRESH, p_inter);
@@ -7297,6 +7610,8 @@ int main( int argc, const char** argv )
     total = loadVertMap();
     num_saved_verts = Vert_idx_set.size();
     printf("vert: %i current, %i external = %i total\n", (int) Vert_idx_set.size(), (int) External_vert_vect.size(), total);
+
+    loadTreeVertMultiMap();
   }
 
   else if (object_input_mode == SCALLOP_MODE) {
@@ -7305,6 +7620,9 @@ int main( int argc, const char** argv )
   }
 
   if (object_input_mode == TREE_MODE) {
+    intersectVertMap(string("nov_01_2016_traintest.txt"));
+    //    intersectVertMap(string("/home/cer/Documents/data/tf_data_Nov_01_2016_Tue_10_42_00_AM/train/trainvert_000.txt"));
+    //    intersectVertMap(string("/home/cer/Documents/data/tf_data_Nov_01_2016_Tue_10_42_00_AM/test/testvert_000.txt"));
     set_current_index(*Vert_idx_set.begin());
     do_verts = true;
   }
