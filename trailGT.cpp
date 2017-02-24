@@ -130,6 +130,8 @@ vector <Point> load_xml_polygon(string, float = 1.0);
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
 
+#define RAD2DEG(r)       ((r * 180.0 ) / M_PI)
+
 #define RAY_DELTA_THRESH 20    // how far we must move from initial click before
                                // using 2nd point to define ray
 #define Y_TOLERANCE      3
@@ -163,6 +165,9 @@ vector <Point> load_xml_polygon(string, float = 1.0);
 #define TRAIL_MODE    1
 #define TREE_MODE     2
 #define SCALLOP_MODE  3
+
+#define TREE_POSITION_EDIT          1  
+#define TREE_WIDTH_ORIENTATION_EDIT 2
 
 #define SCALLOP_ALIVE_TYPE 1
 #define SCALLOP_DEAD_TYPE  2
@@ -273,7 +278,15 @@ bool p_tree_have_direction = false;
 double p_tree_width_val;
 double tree_dx_ortho, tree_dy_ortho;   // unit vector defining direction orthogonal to trunk direction
 
-bool editing_tree = false;
+bool creating_tree = false;   // when we are first making a tree
+bool editing_tree = false;    // when we are modifying existing tree
+int editing_tree_click_dx, editing_tree_click_dy;   // offset from click to initial position of tree
+float editing_tree_click_distance;  // distance of click to tree centerline
+float editing_tree_width;   // tree width before editing starts
+float editing_tree_dx, editing_tree_dy;  // tree orientation before editing starts
+multimap<int, TreeParams>::iterator edited_tree_it;
+bool rotating_tree = false;
+int tree_edit_type;
 
 Point p_topleft, p_topright, p_bottomleft, p_bottomright;
 
@@ -311,6 +324,14 @@ bool do_show_crop_rect = false;
 //#define TOP_AND_BOTTOM_TEST_OUTPUT_HEIGHT  112
 #define TOP_AND_BOTTOM_TEST_OUTPUT_HEIGHT  80
 
+#define TREE_BIG_TOP    4
+#define TREE_BIG_WIDTH  360
+#define TREE_BIG_HEIGHT 180
+
+#define TREE_MED_TOP    24
+#define TREE_MED_WIDTH  320
+#define TREE_MED_HEIGHT 160
+
 // chocolate
 #ifdef OUTPUT_CHOCOLATE_DATA
 int output_crop_top_y = TOP_ONLY_TEST_TOP_Y;  // 25;
@@ -333,13 +354,16 @@ int output_height = TOP_AND_BOTTOM_TEST_OUTPUT_HEIGHT; // TEST_IMAGE_SIZE;  // 7
 #define SCALLOP_IMAGE_WIDTH        1280
 #define SCALLOP_IMAGE_HEIGHT       960
 
-
 int distort_max_horizontal_delta = 75;
 float distort_horizontal_flip_prob = 0.5;
 float distort_max_contrast_delta = 0.5;
 float distort_max_brightness_delta = 50;
 int distort_num_per_image = 10;    // 10
 int nontrail_distort_num_per_image = 6;
+
+int calib_circle_x = 231; // CANONICAL_IMAGE_WIDTH/2;
+int calib_circle_y = 330; // CANONICAL_IMAGE_HEIGHT;
+int calib_circle_radius = 330;
 
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
@@ -880,7 +904,7 @@ void dyn_onMouse(int event, int x, int y, int flags, void *userdata)
   draw_im = current_im.clone();
   dyn_draw_overlay();
 
-  // show current edit that is underway
+  // show current creation that is underway
 
   if (dragging)
     line(draw_im, Point(dragging_x, v.y), Point(v.x, v.y), Scalar(0, 255, 255), 2);
@@ -4276,7 +4300,7 @@ void set_current_index(int new_index)
   }
   else {
     
-    editing_tree = false;
+    creating_tree = false;
     p_tree_inter_result = false;
     p_tree_have_direction = false;
     
@@ -4593,7 +4617,7 @@ void scallop_onMouse(int event, int x, int y, int flags, void *userdata)
   draw_im = current_im.clone();
   scallop_draw_overlay();
 
-  // show current edit that is underway
+  // show current creation that is underway
   
   if (dragging) {
 
@@ -4609,6 +4633,30 @@ void scallop_onMouse(int event, int x, int y, int flags, void *userdata)
 
 //----------------------------------------------------------------------------
 
+/*   
+  Point v_bottom;    // bottom center of trunk
+  float dx, dy;      // unit vector along trunk major axis
+  float width;       // length of minor axis
+*/
+
+bool inside_tree(int x, int y, TreeParams & T)
+{
+  int w;
+  if (T.width < 20)
+    w = 20;
+  else
+    w = T.width;
+  double half_width_squared = 0.25 * (double) (w*w);
+  double dist_squared = (T.v_bottom.x - x)*(T.v_bottom.x - x) + (T.v_bottom.y - y)*(T.v_bottom.y - y);
+
+  if (dist_squared <= half_width_squared) {
+    print_treeparams(stdout, T);
+    return true;
+  }
+  else
+    return false;
+}
+
 // TREE MODE: what to do when mouse is moved/mouse button is push/released
 
 // "rectangular ray": * first click is center of bottom edge (aka
@@ -4619,14 +4667,70 @@ void scallop_onMouse(int event, int x, int y, int flags, void *userdata)
 
 void tree_onMouse(int event, int x, int y, int flags, void *userdata)
 {
-Point p_width;
+  Point p_width;
   int g, b;
   
   // dragging...
 
   if  ( event == EVENT_MOUSEMOVE ) {
 
-    // if dragging, we must be editing tree
+    if (editing_tree) {
+
+      TreeParams T = (*edited_tree_it).second;
+      //      printf("before\n"); print_treeparams(stdout, T);
+      
+      if (tree_edit_type == TREE_POSITION_EDIT) {
+	//printf("changing tree position\n");
+	T.v_bottom.x = x - editing_tree_click_dx;
+	T.v_bottom.y = y - editing_tree_click_dy;
+      }
+      else {
+	//	printf("changing tree angle\n");
+	//  figure out angle with respect to initial angle
+	// figure out width with respect to initial width
+
+	Point p_top_center, p_tree_bottom;
+	float scale_factor = RAY_DELTA_THRESH + 1.0;
+	p_tree_bottom = T.v_bottom;
+	//editing_tree_click_dx = x - p_tree_bottom.x;
+	//editing_tree_click_dy = y - p_tree_bottom.y;
+
+	
+	p_top_center = Point(p_tree_bottom.x + scale_factor * T.dx, p_tree_bottom.y + scale_factor * T.dy);
+
+	float click_dist = fabs(point_line_distance(Point(x, y), p_tree_bottom, p_top_center));
+	if (rotating_tree) {
+	  float theta_tree = atan2(editing_tree_dy, editing_tree_dx);
+	  float theta_click = atan2(editing_tree_click_dy, editing_tree_click_dx);
+	  float theta_now = atan2(y - p_tree_bottom.y, x - p_tree_bottom.x);
+	  float theta_diff = theta_now - theta_click;
+	    //	  printf("%.2f %.2f %.2f\n", RAD2DEG(theta_tree), RAD2DEG(theta_click), RAD2DEG(theta_now));
+	  //	  printf("%.2f %.2f\n", RAD2DEG(theta_tree), RAD2DEG(theta_diff));
+	  float new_theta = theta_tree + theta_diff;
+	  T.dy = sin(new_theta);
+	  T.dx = cos(new_theta);
+	  // 0 degs is right, -90 is straight up, -180 is left
+	}
+	else {
+	  //	  printf("width delta = %.2f \n", click_dist - editing_tree_click_distance);
+	  T.width = editing_tree_width + (click_dist - editing_tree_click_distance);
+	}
+      }
+      
+      //      printf("MOVING tree\n");
+
+      (*edited_tree_it).second = T;
+      //      printf("T after\n"); print_treeparams(stdout, T);
+      // printf("iter after\n"); print_treeparams(stdout, (*edited_tree_it).second);
+
+      draw_im = current_im.clone();
+      tree_draw_overlay();
+      imshow("trailGT", draw_im);  
+
+      return;
+    }
+    
+    // if dragging, we must be creating tree
     
     if (dragging) {
 
@@ -4651,7 +4755,7 @@ Point p_width;
       g = 255; 
       b = 255;
       
-      if (editing_tree) {
+      if (creating_tree) {
 
 	// we have a valid trunk direction
       
@@ -4690,7 +4794,45 @@ Point p_width;
   // cancel
 
   else if  ( event == EVENT_RBUTTONDOWN ) {
-    editing_tree = false;
+
+    if (editing_tree) {
+      printf("STILL editing tree\n");
+      return;
+    }
+
+    // was click inside a tree?
+    
+    pair<multimap<int, TreeParams>::iterator, multimap<int, TreeParams>::iterator> ppp;
+    ppp = Tree_idx_params_map.equal_range(current_index);
+
+    for (multimap<int, TreeParams>::iterator it2 = ppp.first; it2 != ppp.second; ++it2) {
+
+      TreeParams T = (*it2).second;
+
+      if (inside_tree(x, y, T)) {
+	printf("STARTED editing tree width/orientation!\n");
+	editing_tree = true;
+	tree_edit_type = TREE_WIDTH_ORIENTATION_EDIT;
+	
+	Point p_top_center, p_tree_bottom;
+	float scale_factor = RAY_DELTA_THRESH + 1.0;
+	p_tree_bottom = T.v_bottom;
+	editing_tree_click_dx = x - p_tree_bottom.x;
+	editing_tree_click_dy = y - p_tree_bottom.y;
+  
+	p_top_center = Point(p_tree_bottom.x + scale_factor * T.dx, p_tree_bottom.y + scale_factor * T.dy);
+
+	editing_tree_click_distance = fabs(point_line_distance(Point(x, y), p_tree_bottom, p_top_center));
+	editing_tree_width = T.width;
+	editing_tree_dx = T.dx;
+	editing_tree_dy = T.dy;
+	printf("dist %.3f\n", editing_tree_click_distance);
+	edited_tree_it = it2;
+	return;
+      }
+    }
+
+    creating_tree = false;
     p_tree_inter_result = false;
     p_tree_have_direction = false;
 
@@ -4700,11 +4842,34 @@ Point p_width;
 
   else if  ( event == EVENT_LBUTTONDOWN ) {
 
+    if (editing_tree) {
+      printf("STILL editing tree\n");
+      return;
+    }
+
+    // was click inside a tree?
+    
+    pair<multimap<int, TreeParams>::iterator, multimap<int, TreeParams>::iterator> ppp;
+    ppp = Tree_idx_params_map.equal_range(current_index);
+
+    for (multimap<int, TreeParams>::iterator it2 = ppp.first; it2 != ppp.second; ++it2) {
+	
+      if (inside_tree(x, y, (*it2).second)) {
+	printf("STARTED editing tree position!\n");
+	editing_tree = true;
+	tree_edit_type = TREE_POSITION_EDIT;
+	editing_tree_click_dx = x - (*it2).second.v_bottom.x;
+	editing_tree_click_dy = y - (*it2).second.v_bottom.y;
+	edited_tree_it = it2;
+	return;
+      }
+    }
+    
     // ignore initial clicks outside of FAR-NEAR y range
     
     //    if (y >= IMAGE_ROW_FAR && y <= IMAGE_ROW_NEAR) {
-    if (!editing_tree)
-      editing_tree = true;
+    if (!creating_tree)
+      creating_tree = true;
     else {
       // finished!
 
@@ -4718,8 +4883,9 @@ Point p_width;
       printf("inserting tree at image %i\n", current_index);
       Tree_idx_params_map.insert(pair<int, TreeParams>(current_index, t));
       Tree_idx_set.insert(current_index);
+      // erase from NoTree_idx_set?
 
-      editing_tree = false;
+      creating_tree = false;
       p_tree_have_direction = false;
       p_tree_inter_result = false;
     }
@@ -4737,17 +4903,48 @@ Point p_width;
     // }
   }
 
+  else if ( event == EVENT_RBUTTONUP ) {
+
+    if (editing_tree) {
+      editing_tree = false;
+      printf("DONE editing tree\n");
+    }
+
+  }
+  
   // finishing segment
 
-  else if  ( event == EVENT_LBUTTONUP ) {
+  else if ( event == EVENT_LBUTTONUP ) {
 
+    if (editing_tree) {
+
+      // if dragged outside image, delete it
+
+      
+      int edit_index = (*edited_tree_it).first;
+      TreeParams T = (*edited_tree_it).second;
+
+      if (T.v_bottom.x < 0 || T.v_bottom.x >= CANONICAL_IMAGE_WIDTH || 
+	  T.v_bottom.y < 0 || T.v_bottom.y >= CANONICAL_IMAGE_HEIGHT) {
+
+	Tree_idx_params_map.erase(edited_tree_it);
+	Tree_idx_set.erase(edit_index);
+	// insert in NoTree_idx_set?
+
+	printf("erased it\n");
+      }
+
+      editing_tree = false;
+      printf("DONE editing tree\n");
+    }
+    
     dragging = false;
 
     g = 255;
     b = 0;
 
     if (!p_tree_inter_result) {
-      editing_tree = false;
+      creating_tree = false;
     }
     
     // normal
@@ -4769,10 +4966,10 @@ Point p_width;
   draw_im = current_im.clone();
   tree_draw_overlay();
 
-  // show current edit that is underway
+  // show current creation that is underway
   
   //  if (dragging) {
-  if (editing_tree) {
+  if (creating_tree) {
     line(draw_im, p_tree_bottom, p_tree_upper, Scalar(0, 255, 255), 1);
     if (p_tree_inter_result)
       line(draw_im, p_tree_upper, p_tree_inter, Scalar(255, 255, 0), 1);
@@ -4935,7 +5132,7 @@ void trail_onMouse(int event, int x, int y, int flags, void *userdata)
   draw_im = current_im.clone();
   trail_draw_overlay();
 
-  // show current edit that is underway
+  // show current creation that is underway
 
   if (dragging)
     line(draw_im, Point(dragging_x, v.y), Point(v.x, v.y), Scalar(0, 255, 255), 2);
@@ -4966,6 +5163,44 @@ void onKeyPress(char c, bool print_help)
     else
       set_current_index(ZERO_INDEX);
 
+  }
+
+  // for tree editing
+  
+  if (c == 'e') {
+    if (object_input_mode == TREE_MODE) {
+      rotating_tree = !rotating_tree;
+    }
+  }
+
+  if (c == 'u') {
+    calib_circle_x -= 1;
+    printf("x %i y %i r %i\n", calib_circle_x, calib_circle_y, calib_circle_radius);
+  }
+
+  if (c == 'i') {
+    calib_circle_x += 1;
+    printf("x %i y %i r %i\n", calib_circle_x, calib_circle_y, calib_circle_radius);
+  }
+
+  if (c == '[') {
+    calib_circle_radius -= 1;
+    printf("x %i y %i r %i\n", calib_circle_x, calib_circle_y, calib_circle_radius);
+  }
+
+  if (c == ']') {
+    calib_circle_radius += 1;
+    printf("x %i y %i r %i\n", calib_circle_x, calib_circle_y, calib_circle_radius);
+  }
+
+  if (c == '{') {
+    calib_circle_y -= 1;
+    printf("x %i y %i r %i\n", calib_circle_x, calib_circle_y, calib_circle_radius);
+  }
+
+  if (c == '}') {
+    calib_circle_y += 1;
+    printf("x %i y %i r %i\n", calib_circle_x, calib_circle_y, calib_circle_radius);
   }
 
   // most isolated nonvert image remaining
@@ -5394,14 +5629,23 @@ void tree_draw_overlay()
   stringstream ss;
   
   if (do_overlay) {
+
+    if (!do_show_crop_rect) {
+
+      // which image is this?
+      
+      ss << "TREE " << current_index << ": " << current_imname;
+      string str = ss.str();
+      
+      putText(draw_im, str, Point(5, 10), FONT_HERSHEY_SIMPLEX, fontScale, Scalar::all(255), 1, 8);
+    }
     
-    // which image is this?
+    // are we in "rotating" edit mode?
 
-    ss << "TREE " << current_index << ": " << current_imname;
-    string str = ss.str();
-
-    putText(draw_im, str, Point(5, 10), FONT_HERSHEY_SIMPLEX, fontScale, Scalar::all(255), 1, 8);
-
+    if (rotating_tree) {
+      putText(draw_im, "ROTATE", Point(25, 55), FONT_HERSHEY_SIMPLEX, fontScale, Scalar(0, 0, 255), 1, 8);
+    }
+    
     // are we in "verts only" mode?
 
     if (do_verts) 
@@ -5412,14 +5656,47 @@ void tree_draw_overlay()
     for (int i = 0; i < trailEdgeRow.size(); i++) 
       line(draw_im, Point(0, trailEdgeRow[i]), Point(current_im.cols - 1, trailEdgeRow[i]), Scalar(0, 128, 128), 1);
 
+    // crop rectangle(s)
+
+    if (do_show_crop_rect) {
+
+      int center_x = draw_im.cols / 2;
+
+      // circle describing edge of visible area of image
+
+      circle(draw_im, Point(calib_circle_x, calib_circle_y), calib_circle_radius, Scalar(0, 255, 0));
+      
+      // "big" rect
+      
+      int xl = center_x - TREE_BIG_WIDTH/2;
+      int xr = center_x + TREE_BIG_WIDTH/2;
+      int yt = TREE_BIG_TOP;
+      int yb = TREE_BIG_TOP + TREE_BIG_HEIGHT;
+
+      rectangle(draw_im,  
+		Point(xl, yt),
+		Point(xr, yb),
+		Scalar(255, 255, 255), 1);
+
+      // "medium" rect
+      
+      xl = center_x - TREE_MED_WIDTH/2;
+      xr = center_x + TREE_MED_WIDTH/2;
+      yt = TREE_MED_TOP;
+      yb = TREE_MED_TOP + TREE_MED_HEIGHT;
+
+      rectangle(draw_im,  
+		Point(xl, yt),
+		Point(xr, yb),
+		Scalar(155, 155, 155), 1);
+
+    }
+    
     // useful multimap example here: http://www.yolinux.com/TUTORIALS/CppStlMultiMap.html
-    // next step is to print only the trees in *this* image
-    // then draw 'em!
 
     // how many trees in entire dataset
     //    printf("tree count = %i\n", Tree_idx_params_map.size());
 
-    //    printf("============================================= \n");
     pair<multimap<int, TreeParams>::iterator, multimap<int, TreeParams>::iterator> ppp;
 
     ppp = Tree_idx_params_map.equal_range(current_index);
@@ -5432,11 +5709,7 @@ void tree_draw_overlay()
 
       // need mechanism to erase and edit existing trees
       
-      // also want a way to read in trail traintest image indices and only be on them -- this is a smaller set than the images with trail verts
     }
-    
-    //Tree_idx_params_map.insert(pair<int, TreeParams>(current_index, t));
-
   }
 }
 
@@ -6807,6 +7080,7 @@ int loadTreeVertMultiMap()
       printf("inserting tree at image %i\n", image_idx);
       Tree_idx_params_map.insert(pair<int, TreeParams>(image_idx, T));
       Tree_idx_set.insert(image_idx);
+      // erase from NoTree_idx_set?
     }
     else 
       printf("image sig not found\n");
@@ -6887,7 +7161,7 @@ void intersectVertMap(string traintest_filename)
 
   int num_to_remove = 0;
 
-  printf("%i verts, %i no verts (original size)\n", Vert_idx_set.size(), NoVert_idx_set.size());
+  printf("%i verts, %i no verts (original size)\n", (int) Vert_idx_set.size(), (int) NoVert_idx_set.size());
   
   //  for (idx_iter = Vert_idx_set.begin(); idx_iter != Vert_idx_set.end(); idx_iter++) {
   idx_iter = Vert_idx_set.begin();
@@ -6911,7 +7185,7 @@ void intersectVertMap(string traintest_filename)
 
   }
 
-  printf("%i verts, %i no verts (final size) -- %i removed/added\n", Vert_idx_set.size(), NoVert_idx_set.size(), num_to_remove);
+  printf("%i verts, %i no verts (final size) -- %i removed/added\n", (int) Vert_idx_set.size(), (int) NoVert_idx_set.size(), num_to_remove);
   
 
   /*
@@ -7048,6 +7322,8 @@ vector <float> old_make_line(Point p1, Point p2)
 }
 
 //----------------------------------------------------------------------------
+
+// distance from q to line defined by (p1, p2)
 
 float point_line_distance(Point q, Point p1, Point p2)
 {
