@@ -63,6 +63,7 @@ bool line_segment_intersection(Point, Point, Point, Point, Point &);
 bool ray_line_segment_intersection(Point, Point, Point, Point, double, Point &);
 bool ray_image_boundaries_intersection(Point, Point, double, Point &);
 float point_line_distance(Point, Point, Point);
+bool ray_calib_circle_intersection(Point, Point, double, Point &);
 
 Mat apply_precomputed_distortion(DistortParams &, Mat &, const vector <int> &, vector <int> &, const vector <int> &, vector <int> &);
 
@@ -110,6 +111,27 @@ void write_traintest_scallop(string = "/tmp/scallop_data", float = 0.8);
 void print_filter_stats_scallop();
 void compute_stats_traintest_scallop();
 bool filter_for_traintest_scallop(ScallopParams &);
+
+// width >= 10 and position >= 35 from edge => 381 useable trees
+// width >= 10 and position >= 20 from edge => 661 useable trees
+// width >= 5 and position >= 35 from edge => 596 useable trees
+// width >= 5 and position >= 20 from edge => 1061 useable trees
+
+// width in [10, 100] and position >= width from ALL edges => 650 useable trees
+// width in [9, 90] and position >= width from ALL edges => 724 useable trees
+// width in [8, 80] and position >= width from ALL edges => 831 useable trees
+// width in [7, 70] and position >= width from ALL edges => 941 useable trees
+// width in [6, 60] and position >= width from ALL edges => 1045 useable trees
+// width in [5, 50] and position >= width from ALL edges => 1177 useable trees
+// width in [5, 100] and position >= width from ALL edges => 1182 useable trees
+
+#define TREE_TRAINTEST_MAX_WIDTH_PIXELS   100
+#define TREE_TRAINTEST_MIN_WIDTH_PIXELS   5
+#define TREE_TRAINTEST_FRAME_WIDTH        -1  // 20
+
+bool filter_for_traintest_tree(TreeParams &);
+bool width_filter_for_traintest_tree(TreeParams &);
+bool position_filter_for_traintest_tree(TreeParams &,int=TREE_TRAINTEST_FRAME_WIDTH);
 
 int most_isolated_nonvert_image_idx();
 int most_isolated_nonvert_image_idx(int);
@@ -235,6 +257,7 @@ set <int> Tree_idx_set;          // which images have tree info
 set <int> NoTree_idx_set;        // which images do NOT have tree info (Tree U NoTree = all images)
 
 multimap<int, TreeParams> Tree_idx_params_map;
+int tree_idx_counter = 0;
 
 //-------------------------------------------------------------------
 
@@ -4441,11 +4464,15 @@ void draw_treeparams(Mat & draw_im, TreeParams & t, int r, int g, int b)
   float p_tree_width_val = 0.5 * t.width;
   float tree_dx_ortho, tree_dy_ortho;
   Point p_left_inter, p_right_inter;
+  Point p_center_circle_inter, p_left_circle_inter, p_right_circle_inter;
   
   // centerline
   
-  if (ray_image_boundaries_intersection(p_tree_bottom, p_top_center, RAY_DELTA_THRESH, p_center_inter)) 
-    line(draw_im, p_tree_bottom, p_center_inter, Scalar(r, g, b), 1);
+  //  if (ray_image_boundaries_intersection(p_tree_bottom, p_top_center, RAY_DELTA_THRESH, p_center_inter)) 
+  //    line(draw_im, p_tree_bottom, p_center_inter, Scalar(r, g, b), 1);
+
+  //  if (ray_calib_circle_intersection(p_tree_bottom, p_top_center, RAY_DELTA_THRESH, p_center_circle_inter)) 
+  //    line(draw_im, p_tree_bottom, p_center_circle_inter, Scalar(255-r, 255-g, 255-b), 1);
 
   tree_dx_ortho = p_top_center.x - p_tree_bottom.x;
   tree_dy_ortho = p_top_center.y - p_tree_bottom.y;
@@ -4469,14 +4496,18 @@ void draw_treeparams(Mat & draw_im, TreeParams & t, int r, int g, int b)
   Point p_upper_right = Point(p_top_center.x + idx, p_top_center.y + idy);
   Point p_upper_left = Point(p_top_center.x - idx, p_top_center.y - idy);
   
-  if (ray_image_boundaries_intersection(p_bottom_left, p_upper_left, RAY_DELTA_THRESH, p_left_inter)) 
-    //      line(draw_im, p_bottom_left, p_left_inter, Scalar(3*r/4, 3*g/2, 3*b/4), 1);
-    line(draw_im, p_bottom_left, p_left_inter, Scalar(r, g, b), 1);
-  
-  if (ray_image_boundaries_intersection(p_bottom_right, p_upper_right, RAY_DELTA_THRESH, p_right_inter)) 
-    //      line(draw_im, p_bottom_right, p_right_inter, Scalar(3*r/4, 3*g/4, 3*b/4), 1);
-    line(draw_im, p_bottom_right, p_right_inter, Scalar(r, g, b), 1);
-  
+  //  if (ray_image_boundaries_intersection(p_bottom_left, p_upper_left, RAY_DELTA_THRESH, p_left_inter)) 
+  //    line(draw_im, p_bottom_left, p_left_inter, Scalar(r, g, b), 1);
+
+  if (ray_calib_circle_intersection(p_bottom_left, p_upper_left, RAY_DELTA_THRESH, p_left_circle_inter)) 
+    line(draw_im, p_bottom_left, p_left_circle_inter, Scalar(r, g, b), 1);
+
+  //  if (ray_image_boundaries_intersection(p_bottom_right, p_upper_right, RAY_DELTA_THRESH, p_right_inter)) 
+  //    line(draw_im, p_bottom_right, p_right_inter, Scalar(r, g, b), 1);
+
+  if (ray_calib_circle_intersection(p_bottom_right, p_upper_right, RAY_DELTA_THRESH, p_right_circle_inter)) 
+    line(draw_im, p_bottom_right, p_right_circle_inter, Scalar(r, g, b), 1);
+
   /*
   if (p_tree_inter_result)
     line(draw_im, p_tree_upper, p_tree_inter, Scalar(255, 255, 0), 1);
@@ -4810,7 +4841,7 @@ void tree_onMouse(int event, int x, int y, int flags, void *userdata)
       TreeParams T = (*it2).second;
 
       if (inside_tree(x, y, T)) {
-	printf("STARTED editing tree width/orientation!\n");
+	//	printf("STARTED editing tree width/orientation!\n");
 	editing_tree = true;
 	tree_edit_type = TREE_WIDTH_ORIENTATION_EDIT;
 	
@@ -4855,7 +4886,7 @@ void tree_onMouse(int event, int x, int y, int flags, void *userdata)
     for (multimap<int, TreeParams>::iterator it2 = ppp.first; it2 != ppp.second; ++it2) {
 	
       if (inside_tree(x, y, (*it2).second)) {
-	printf("STARTED editing tree position!\n");
+	//	printf("STARTED editing tree position!\n");
 	editing_tree = true;
 	tree_edit_type = TREE_POSITION_EDIT;
 	editing_tree_click_dx = x - (*it2).second.v_bottom.x;
@@ -4907,7 +4938,7 @@ void tree_onMouse(int event, int x, int y, int flags, void *userdata)
 
     if (editing_tree) {
       editing_tree = false;
-      printf("DONE editing tree\n");
+      //      printf("DONE editing tree\n");
     }
 
   }
@@ -4935,7 +4966,7 @@ void tree_onMouse(int event, int x, int y, int flags, void *userdata)
       }
 
       editing_tree = false;
-      printf("DONE editing tree\n");
+      //      printf("DONE editing tree\n");
     }
     
     dragging = false;
@@ -5160,9 +5191,10 @@ void onKeyPress(char c, bool print_help)
 
     if (print_help) 
       printf("0 = return to index 0 image\n");
-    else
+    else {
       set_current_index(ZERO_INDEX);
-
+      tree_idx_counter = 0;
+    }
   }
 
   // for tree editing
@@ -5252,6 +5284,7 @@ void onKeyPress(char c, bool print_help)
 	  else
 	    iter++;
 	  set_current_index(*iter);
+	  tree_idx_counter = (tree_idx_counter + 1) % (int) Vert_idx_set.size();
 	}
 	else
 	  set_current_index(current_index + step_idx);
@@ -5289,7 +5322,11 @@ void onKeyPress(char c, bool print_help)
 	    --iter;
 	  }
 	  set_current_index(*iter);
-	  
+
+	  tree_idx_counter--;
+	  if (tree_idx_counter < 0)
+	    tree_idx_counter = (int) Vert_idx_set.size() + tree_idx_counter;
+
 	}
 	else
 	  set_current_index(current_index - step_idx);
@@ -5633,8 +5670,9 @@ void tree_draw_overlay()
     if (!do_show_crop_rect) {
 
       // which image is this?
-      
-      ss << "TREE " << current_index << ": " << current_imname;
+
+	ss << "TREE " << tree_idx_counter << " [" << (int) Vert_idx_set.size() << "]: " << current_imname;
+	//	ss << "TREE " << current_index << " [" << (int) Vert_idx_set.size() << "]: " << current_imname;
       string str = ss.str();
       
       putText(draw_im, str, Point(5, 10), FONT_HERSHEY_SIMPLEX, fontScale, Scalar::all(255), 1, 8);
@@ -5665,19 +5703,35 @@ void tree_draw_overlay()
       // circle describing edge of visible area of image
 
       circle(draw_im, Point(calib_circle_x, calib_circle_y), calib_circle_radius, Scalar(0, 255, 0));
+
+      // little rect for trail localization
+
+      int xl = center_x - output_crop_width/2;
+      int xr = center_x + output_crop_width/2;
+      int yt = output_crop_top_y;
+      int yb = output_crop_top_y + output_crop_height;
+
+      /*
+      rectangle(draw_im,  
+		Point(xl, yt),
+		Point(xr, yb),
+		Scalar(55, 55, 55), 1);
+      */
       
       // "big" rect
-      
-      int xl = center_x - TREE_BIG_WIDTH/2;
-      int xr = center_x + TREE_BIG_WIDTH/2;
-      int yt = TREE_BIG_TOP;
-      int yb = TREE_BIG_TOP + TREE_BIG_HEIGHT;
+
+      /*
+      xl = center_x - TREE_BIG_WIDTH/2;
+      xr = center_x + TREE_BIG_WIDTH/2;
+      yt = TREE_BIG_TOP;
+      yb = TREE_BIG_TOP + TREE_BIG_HEIGHT;
 
       rectangle(draw_im,  
 		Point(xl, yt),
 		Point(xr, yb),
 		Scalar(255, 255, 255), 1);
-
+      */
+      
       // "medium" rect
       
       xl = center_x - TREE_MED_WIDTH/2;
@@ -5705,7 +5759,21 @@ void tree_draw_overlay()
       //    printf("%i: ", (*it2).first);
       // print_treeparams(stdout, (*it2).second);
       // draw here instead of print
-      draw_treeparams(draw_im, (*it2).second, 255, 0, 255);
+      int r = 0;
+      int g = 255;
+      int b = 0;
+
+      if (!width_filter_for_traintest_tree((*it2).second)) {
+	r = 100;
+	g = b = 0;
+      }
+      else if (!position_filter_for_traintest_tree((*it2).second)) {
+	//      else if (!position_filter_for_traintest_tree((*it2).second, false)) {
+	b = 100;
+	g = r = 0;
+      }
+
+      draw_treeparams(draw_im, (*it2).second, b, g, r);
 
       // need mechanism to erase and edit existing trees
       
@@ -6458,6 +6526,76 @@ bool far_enough_from_edge_filter_for_traintest_scallop(ScallopParams & scparams)
 
 //----------------------------------------------------------------------------
 
+bool width_filter_for_traintest_tree(TreeParams & T)
+{
+  if (T.width < TREE_TRAINTEST_MIN_WIDTH_PIXELS ||
+      T.width > TREE_TRAINTEST_MAX_WIDTH_PIXELS) {
+    return false;
+  }
+
+  return true;
+}
+
+//----------------------------------------------------------------------------
+
+// frame_width = 35 corresponds to old do_tight (use trail localization image bounds)
+
+bool position_filter_for_traintest_tree(TreeParams & T, int frame_width)
+{
+  int tree_filter_min_x, tree_filter_max_x;
+  int tree_filter_min_y, tree_filter_max_y;
+
+  // max y is always the same
+  tree_filter_max_y = TREE_MED_TOP + TREE_MED_HEIGHT;
+
+  /*
+  // make sure position is inside trail localization image
+  // => image is MED box (320 x 160)
+  if (do_tight) {
+    tree_filter_min_x = CANONICAL_IMAGE_WIDTH / 2 - output_crop_width/2; 
+    tree_filter_max_x = CANONICAL_IMAGE_WIDTH / 2 + output_crop_width/2; 
+    tree_filter_min_y = output_crop_top_y;
+  }
+  */
+  
+  // make sure position is inside MED box
+  // => image is BIG box (360 x 180)
+  //  else {
+  //    int frame_width = 20;
+  //    int frame_width = 35;
+
+  if (frame_width < 0) {
+    frame_width = T.width;
+    tree_filter_max_y -= T.width;
+  }
+  
+  tree_filter_min_x = CANONICAL_IMAGE_WIDTH / 2 - TREE_MED_WIDTH/2 + frame_width;
+  tree_filter_max_x = CANONICAL_IMAGE_WIDTH / 2 + TREE_MED_WIDTH/2 - frame_width;
+  tree_filter_min_y = TREE_MED_TOP + frame_width;
+    //  }
+  
+  if (T.v_bottom.x < tree_filter_min_x || T.v_bottom.x > tree_filter_max_x ||
+      T.v_bottom.y < tree_filter_min_y || T.v_bottom.y > tree_filter_max_y) {
+    return false;
+  }
+
+  return true;
+}
+
+//----------------------------------------------------------------------------
+
+bool filter_for_traintest_tree(TreeParams & T)
+{
+  if (!width_filter_for_traintest_tree(T) || 
+      //      !position_filter_for_traintest_tree(T, false))
+      !position_filter_for_traintest_tree(T))
+    return false;
+  else
+    return true;
+}
+
+//----------------------------------------------------------------------------
+
 bool filter_for_traintest_scallop(ScallopParams & scparams)
 {
   if (!has_scale_filter_for_traintest_scallop(scparams))
@@ -7097,7 +7235,88 @@ int loadTreeVertMultiMap()
 
 void write_traintest_tree(string dir, float training_fraction)
 {
+  set<int>::iterator idx_iter;
+  pair<multimap<int, TreeParams>::iterator, multimap<int, TreeParams>::iterator> ppp;
+  int num_images = 0;
+  int num_images_with_trees = 0;
+  int num_trees = 0;
+  int num_width_ok_trees = 0;
+  int num_position_ok_trees = 0;
+  int num_passed_trees = 0;
+  string image_sig;
+  vector < pair <string, TreeParams > > tree_traintest;
 
+  // iterate over images
+  
+  for (idx_iter = Vert_idx_set.begin(); idx_iter != Vert_idx_set.end(); idx_iter++) {
+
+    num_images++;
+
+    image_sig = Idx_signature_vect[*idx_iter];
+    
+    // iterate over trees in this image
+    
+    ppp = Tree_idx_params_map.equal_range(*idx_iter);
+
+    int num_trees_before = num_trees;
+    
+    for (multimap<int, TreeParams>::iterator it2 = ppp.first; it2 != ppp.second; ++it2) {
+      num_trees++;
+      //    printf("%i: ", (*it2).first);
+      // print_treeparams(stdout, (*it2).second);
+
+      int tests_passed = 0;
+
+      TreeParams T = (*it2).second;
+      
+      if (width_filter_for_traintest_tree(T)) {
+	num_width_ok_trees++;
+	tests_passed++;
+      }
+      
+      if (position_filter_for_traintest_tree(T)) {
+	num_position_ok_trees++;
+	tests_passed++;
+      }
+
+      if (tests_passed == 2) {
+	num_passed_trees++;
+	tree_traintest.push_back(make_pair(image_sig, T));
+      }
+    }
+
+    if (num_trees != num_trees_before)
+      num_images_with_trees++;
+  }
+
+  printf("images = %i (%i with trees), total trees = %i (%i good width, %i good position) => %i passed\n", num_images, num_images_with_trees, num_trees, num_width_ok_trees, num_position_ok_trees, num_passed_trees);
+
+  string date_str = string(UD_datetime_string());
+  set < string > image_sig_set;
+  stringstream ss;
+  string annotations_path, imagesets_path;
+
+  ss << "mkdir " << dir << "_" << date_str;
+  printf("%s\n", ss.str().c_str());
+  //  system(ss.str().c_str());
+
+  ss.str("");
+  ss << dir << "_" << date_str << "/Annotations";
+  annotations_path = ss.str();
+  ss.str("");
+  ss << "mkdir " << annotations_path; 
+  printf("%s\n", ss.str().c_str());
+  //  system(ss.str().c_str());
+
+  ss.str("");
+  ss << dir << "_" << date_str << "/ImageSets";
+  imagesets_path = ss.str();
+  ss.str("");
+  ss << "mkdir " << imagesets_path; 
+  printf("%s\n", ss.str().c_str());
+  //  system(ss.str().c_str());
+
+  // xxx must be continued...
 }
 
 //----------------------------------------------------------------------------
@@ -7541,6 +7760,51 @@ bool ray_line_segment_intersection(Point p1, Point p2, Point p1_prime, Point p2_
 
 //----------------------------------------------------------------------------
 
+// we assume ray origin is inside circle
+
+bool ray_calib_circle_intersection(Point p1, Point p2, double delta_thresh, Point & p_inter)
+{
+  bool result;
+  Point p_diff;
+  double p_len;
+  double a, b, c;
+  double x0, y0;   // ray origin shifted so that circle's origin is (0, 0)
+  
+  p_diff.x = p2.x - p1.x;
+  p_diff.y = p2.y - p1.y;
+  p_len = sqrt(p_diff.x * p_diff.x + p_diff.y * p_diff.y);
+  
+  // make sure p1 and p2 are far enough apart
+    
+  if (p_len < delta_thresh)
+    return false;
+
+  double dx = (double) p_diff.x / p_len;
+  double dy = (double) p_diff.y / p_len;
+
+  a = 1.0; // unit direction vector
+  
+  x0 = (double) p1.x - (double) calib_circle_x;
+  y0 = (double) p1.y - (double) calib_circle_y;
+  b = 2.0 * (dx * x0 + dy * y0);
+
+  double r = (double) calib_circle_radius;
+  c = x0*x0 + y0*y0 - r*r;
+
+  double radical = sqrt(b*b - 4.0 * a * c);
+
+  double t_plus = (-b + radical) / (2.0 * a);
+  double t_minus = (-b - radical) / (2.0 * a);
+  //  printf("plus %.2lf minus %.2lf\n", t_plus, t_minus);
+  
+  p_inter.x = p1.x + (int) rint(t_plus * dx);
+  p_inter.y = p1.y + (int) rint(t_plus * dy);
+
+  return true;
+}
+
+//----------------------------------------------------------------------------
+
 bool ray_image_boundaries_intersection(Point p1, Point p2, double delta_thresh, Point & p_inter)
 {
   bool result;
@@ -7900,6 +8164,7 @@ int main( int argc, const char** argv )
     //    intersectVertMap(string("/home/cer/Documents/data/tf_data_Nov_01_2016_Tue_10_42_00_AM/train/trainvert_000.txt"));
     //    intersectVertMap(string("/home/cer/Documents/data/tf_data_Nov_01_2016_Tue_10_42_00_AM/test/testvert_000.txt"));
     set_current_index(*Vert_idx_set.begin());
+    tree_idx_counter = 0;
     do_verts = true;
   }
   else 
