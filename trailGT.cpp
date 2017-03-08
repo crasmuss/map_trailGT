@@ -47,7 +47,6 @@ struct ScallopDistortParams
   bool do_vertical_flip;                      // do flip?
   bool do_horizontal_flip;                    
   float contrast_factor, brightness_factor;   // encodes value scaling, shift of each pixel channel
-
 };
 
 //----------------------------------------------------------------------------
@@ -83,8 +82,10 @@ float point_line_distance(Point, Point, Point);
 bool ray_calib_circle_intersection(Point, Point, double, Point &);
 
 Mat apply_precomputed_trail_distortion(TrailDistortParams &, Mat &, const vector <int> &, vector <int> &, const vector <int> &, vector <int> &);
+Mat apply_precomputed_scallop_distortion(ScallopDistortParams &, const Mat &, const vector <ScallopParams> &, vector <ScallopParams> &);
 
 void print_trail_distortion(FILE *, TrailDistortParams &);
+void print_scallop_distortion(FILE *, ScallopDistortParams &);
 
 void dyn_save_vertfile(int);
 void dyn_onKeyPress(char, bool=false);
@@ -92,7 +93,7 @@ int snap_y(int);
 void set_current_index(int);
 
 void onKeyPress(char, bool=false);
-Mat smart_imread(string &);
+Mat trail_smart_imread(string &);
 string fullpathname_from_logdir_and_seqnum(string &, int);
 
 void compute_trajectory();
@@ -220,6 +221,8 @@ vector <Point> load_xml_polygon(string, float = 1.0);
 
 #define SCALLOP_UP    1.6   // from Hunter's web coords to image coords
 
+#define MIN_SCALLOP_INSIDE_FRACTION  0.5
+
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
 
@@ -256,6 +259,8 @@ vector <ScallopParams> scallop_params_vect;
 map <int, string> scallop_idx_signature_map;
 map <int, int> scallop_idx_line_idx_map;
 map <int, int> scallop_line_idx_idx_map;
+
+multimap<string, TreeParams> Scallop_sig_params_map;
 
 Point p_scallop_start, p_scallop_end;
 Point p_mouse, p_mouse_dx, p_mouse_dy;
@@ -402,8 +407,12 @@ float distort_max_brightness_delta = 50;
 int distort_num_per_image = 10;    // 10
 int nontrail_distort_num_per_image = 6;
 
-int distort_max_scallop_frame_width = 50;
-float distort_scallop_vertical_flip_prob = 0.5;
+int scallop_distort_max_horizontal_frame_width = 128;
+int scallop_distort_max_vertical_frame_width = 96;
+float scallop_distort_vertical_flip_prob = 0.5;
+float scallop_distort_horizontal_flip_prob = 0.5;
+float scallop_distort_max_contrast_delta = 0.25;   // 0.5 seems a bit much
+float scallop_distort_max_brightness_delta = 25;   // 50 also pretty high
 
 int calib_circle_x = 231; // CANONICAL_IMAGE_WIDTH/2;
 int calib_circle_y = 330; // CANONICAL_IMAGE_HEIGHT;
@@ -1505,7 +1514,7 @@ void annotate_dynamics(bool do_train)
     current_imname = DynFullpathname[current_index][dyn_current_seq_idx];
     current_imsig = fullpathname_to_signature(current_imname);
 
-    current_im = smart_imread(current_imname);
+    current_im = trail_smart_imread(current_imname);
     draw_im = current_im.clone();
 
     // show image 
@@ -1615,7 +1624,7 @@ void full_annotate_dynamics(bool do_train)
       FarXval_new.resize(FarXval.size());
       NearXval_new.resize(NearXval.size());
 
-      Mat seqim = smart_imread(seqfullpathname);
+      Mat seqim = trail_smart_imread(seqfullpathname);
       
       Mat distorted_output_im = apply_precomputed_trail_distortion(DistortDynParams[i],
 							     seqim, 
@@ -1695,7 +1704,7 @@ void full_annotate_dynamics(bool do_train)
     current_imname = DynFullpathname[current_index][dyn_current_seq_idx];
     current_imsig = fullpathname_to_signature(current_imname);
 
-    current_im = smart_imread(current_imname);
+    current_im = trail_smart_imread(current_imname);
     draw_im = current_im.clone();
 
     // show image 
@@ -1771,7 +1780,7 @@ void compute_trajectory()
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
 
-Mat smart_imread(string & fullpathname)
+Mat trail_smart_imread(string & fullpathname)
 {
   Mat im = imread(fullpathname.c_str());
 
@@ -2058,7 +2067,7 @@ void filter_out_overly_similar_bad_images()
 
   for (iter = Bad_idx_set.begin(); iter != Bad_idx_set.end(); iter = iter_next) {
 
-    im1 = smart_imread(Fullpathname_vect[*iter]);
+    im1 = trail_smart_imread(Fullpathname_vect[*iter]);
     //    printf("%i\n", *iter);
 
     FilteredBad_idx_set.insert(*iter);
@@ -2070,7 +2079,7 @@ void filter_out_overly_similar_bad_images()
 
     while (iter_next != Bad_idx_set.end()) {
 
-      im2 = smart_imread(Fullpathname_vect[*iter_next]);
+      im2 = trail_smart_imread(Fullpathname_vect[*iter_next]);
 
       sim = image_similarity(im1, im2);
 
@@ -2108,7 +2117,7 @@ void filter_out_overly_similar_images()
 
   for (iter = Vert_idx_set.begin(); iter != Vert_idx_set.end(); iter = iter_next) {
 
-    im1 = smart_imread(Fullpathname_vect[*iter]);
+    im1 = trail_smart_imread(Fullpathname_vect[*iter]);
     //    printf("%i\n", *iter);
 
     FilteredVert_idx_set.insert(*iter);
@@ -2120,7 +2129,7 @@ void filter_out_overly_similar_images()
 
     while (iter_next != Vert_idx_set.end()) {
 
-      im2 = smart_imread(Fullpathname_vect[*iter_next]);
+      im2 = trail_smart_imread(Fullpathname_vect[*iter_next]);
 
       sim = image_similarity(im1, im2);
 
@@ -2430,7 +2439,7 @@ void write_traintest_vanilla_grayscale(string dir, float training_fraction)
 
     //    printf("new %i: reading %s\n", i, TrainTest[i].first.c_str());
 
-    im = smart_imread(TrainTest[i].first);
+    im = trail_smart_imread(TrainTest[i].first);
 
     // for each, crop, resize, and WRITE
     
@@ -2653,7 +2662,7 @@ Mat far_distort_one_image(Mat & input_im, const vector <int> & Xval, vector <int
 
 // when we are actually using color in the network, add random hue/saturation changes?
 
-// input_im is raw image (after smart_imread())
+// input_im is raw image (after trail_smart_imread())
 
 // Xval is AFTER crop (subtract x_left) and scale (multiply by crop_scale_factor)
 // x_left, x_right, x_left_new, and x_right_new are BEFORE crop
@@ -2892,6 +2901,16 @@ void print_trail_distortion(FILE *fp, TrailDistortParams & D)
 
 //----------------------------------------------------------------------------
 
+// order: x, y, w, h, vflip, hflip, contrast, brightness
+
+void print_scallop_distortion(FILE *fp, ScallopDistortParams & D)
+{
+  fprintf(fp, "%i, %i, %i, %i, %i, %i, %.3f, %.3f\n", D.x_crop, D.y_crop, D.w_crop, D.h_crop, D.do_vertical_flip, D.do_horizontal_flip, D.contrast_factor, D.brightness_factor);
+  fflush(fp);
+}
+
+//----------------------------------------------------------------------------
+
 // FAR AND NEAR
 
 // compute and save distortion factors, but don't actually apply them (yet)
@@ -2982,29 +3001,39 @@ ScallopDistortParams precompute_scallop_distort_one_image(Mat & input_im)
 
   // (1) crop rectangle
 
-  S.x_crop = ranged_uniform_UD_Random(0, distort_max_scallop_frame_width);
-  S.y_crop = ranged_uniform_UD_Random(0, distort_max_scallop_frame_width);
-  S.w_crop = ranged_uniform_UD_Random(input_im.cols - distort_max_scallop_frame_width, input_im.cols - 1) - S.x_crop;
-  S.h_crop = ranged_uniform_UD_Random(input_im.rows - distort_max_scallop_frame_width, input_im.rows - 1) - S.y_crop;
+  S.x_crop = ranged_uniform_UD_Random(0, scallop_distort_max_horizontal_frame_width);
+  S.y_crop = ranged_uniform_UD_Random(0, scallop_distort_max_vertical_frame_width);
+  S.w_crop = ranged_uniform_UD_Random(input_im.cols - scallop_distort_max_horizontal_frame_width, input_im.cols - 1) - S.x_crop;
+  S.h_crop = ranged_uniform_UD_Random(input_im.rows - scallop_distort_max_vertical_frame_width, input_im.rows - 1) - S.y_crop;
     
   // (2) flips
 
-  S.do_vertical_flip = probability_UD_Random(distort_scallop_vertical_flip_prob);
-  S.do_horizontal_flip = probability_UD_Random(distort_horizontal_flip_prob);
+  S.do_vertical_flip = probability_UD_Random(scallop_distort_vertical_flip_prob);
+  S.do_horizontal_flip = probability_UD_Random(scallop_distort_horizontal_flip_prob);
 
   // (3) random contrast/brightness change -- does NOT change FarXval
 
-  S.contrast_factor = ranged_uniform_UD_Random(1.0 - distort_max_contrast_delta, 1.0 + distort_max_contrast_delta);   // 1 is no change
-  S.brightness_factor = ranged_uniform_UD_Random(-distort_max_brightness_delta, distort_max_brightness_delta);        // 0 is no change
+  S.contrast_factor = ranged_uniform_UD_Random(1.0 - scallop_distort_max_contrast_delta, 1.0 + scallop_distort_max_contrast_delta);   // 1 is no change
+  S.brightness_factor = ranged_uniform_UD_Random(-scallop_distort_max_brightness_delta, scallop_distort_max_brightness_delta);        // 0 is no change
 
   return S;
 }
 
 //----------------------------------------------------------------------------
 
+void precompute_scallop_image_distortions(Mat & input_im, int num_distortions, vector <ScallopDistortParams> & V_distort)
+{
+  V_distort.clear();
+
+  for (int i = 0; i < num_distortions; i++) 
+    V_distort.push_back(precompute_scallop_distort_one_image(input_im));
+}
+
+//----------------------------------------------------------------------------
+
 // this function is expecting FarXval and NearXval to be in cropped/scaled image coordinates 
 
-// input_im should be the dimensions/orientation returned by smart_imread()
+// input_im should be the dimensions/orientation returned by trail_smart_imread()
 
 Mat apply_precomputed_trail_distortion(TrailDistortParams & D,
 				       Mat & input_im, 
@@ -3072,6 +3101,82 @@ Mat apply_precomputed_trail_distortion(TrailDistortParams & D,
   }
 
   // (3) random contrast/brightness change -- does NOT change FarXval
+
+  output_im.convertTo(output_im, -1, D.contrast_factor, D.brightness_factor);
+
+  // done
+
+  return output_im;
+}
+
+//----------------------------------------------------------------------------
+
+Mat apply_precomputed_scallop_distortion(ScallopDistortParams & D, const Mat & input_im, const vector <ScallopParams> & V_params, vector <ScallopParams> & V_distorted_params) 
+{
+  int i, ytemp, xtemp;
+  float horiz_scale_factor, vert_scale_factor;
+  ScallopParams sc;
+  
+  V_distorted_params.clear();
+  
+  // (1) crop, scale
+  
+  Rect crop_rect(D.x_crop, D.y_crop, D.w_crop, D.h_crop);
+  Mat crop_im = input_im(crop_rect);
+  Mat output_im = Mat(input_im.rows, input_im.cols, CV_8UC3);
+  resize(crop_im, output_im, output_im.size(), 0, 0, INTER_CUBIC);
+
+  horiz_scale_factor = (float) input_im.cols / (float) D.w_crop;
+  vert_scale_factor = (float) input_im.rows / (float) D.h_crop;
+
+  for (i = 0; i < V_params.size(); i++) {
+
+    sc.p_upper_left.x = V_params[i].p_upper_left.x - D.x_crop;
+    sc.p_upper_left.y = V_params[i].p_upper_left.y - D.y_crop;
+
+    sc.p_upper_left.x = (int) rint(horiz_scale_factor * (float) sc.p_upper_left.x);
+    sc.p_upper_left.y = (int) rint(vert_scale_factor * (float) sc.p_upper_left.y);
+
+    sc.p_lower_right.x = V_params[i].p_lower_right.x - D.x_crop;
+    sc.p_lower_right.y = V_params[i].p_lower_right.y - D.y_crop;
+
+    sc.p_lower_right.x = (int) rint(horiz_scale_factor * (float) sc.p_lower_right.x);
+    sc.p_lower_right.y = (int) rint(vert_scale_factor * (float) sc.p_lower_right.y);
+
+    V_distorted_params.push_back(sc);
+  }
+  
+  // (2) flip vertically/horizontally?
+
+  if (D.do_vertical_flip) {
+    
+    flip(output_im, output_im, 0);
+
+    // this makes upper lower and vice versa, so swap their y vals
+    
+    for (i = 0; i < V_distorted_params.size(); i++) {
+      V_distorted_params[i].p_upper_left.y = input_im.rows - V_distorted_params[i].p_upper_left.y - 1; 
+      V_distorted_params[i].p_lower_right.y = input_im.rows - V_distorted_params[i].p_lower_right.y - 1; 
+      ytemp = V_distorted_params[i].p_upper_left.y;
+      V_distorted_params[i].p_upper_left.y = V_distorted_params[i].p_lower_right.y;
+      V_distorted_params[i].p_lower_right.y = ytemp;
+    }
+  }
+
+  if (D.do_horizontal_flip) {
+
+    flip(output_im, output_im, 1);
+
+    for (i = 0; i < V_distorted_params.size(); i++) {
+      V_distorted_params[i].p_upper_left.x = input_im.cols - V_distorted_params[i].p_upper_left.x - 1; 
+      V_distorted_params[i].p_lower_right.x = input_im.cols - V_distorted_params[i].p_lower_right.x - 1;
+      xtemp = V_distorted_params[i].p_upper_left.x;
+      V_distorted_params[i].p_upper_left.x = V_distorted_params[i].p_lower_right.x;
+      V_distorted_params[i].p_lower_right.x = xtemp;
+    }
+  }
+  
+  // (3) random contrast/brightness change 
 
   output_im.convertTo(output_im, -1, D.contrast_factor, D.brightness_factor);
 
@@ -3380,7 +3485,7 @@ void write_traintest_chocolate_color(string dir, float training_fraction)
 
     //    printf("new %i: reading %s\n", i, TrainTest[i].first.c_str());
 
-    im = smart_imread(TrainTest[i].first);
+    im = trail_smart_imread(TrainTest[i].first);
     string imsig = fullpathname_to_signature(TrainTest[i].first);
 
     // for each, crop, resize, and WRITE
@@ -3687,7 +3792,7 @@ void write_traintest_peach_color(string dir, float training_fraction)
     //    printf("new %i: reading %s\n", i, TrainTest[i].first.c_str());
     //   fflush(stdout);
 
-    im = smart_imread(TrainTest[i].first);
+    im = trail_smart_imread(TrainTest[i].first);
     string imsig = fullpathname_to_signature(TrainTest[i].first);
 
     //    printf("%i: %s %i x %i\n", i, imsig.c_str(), im.cols, im.rows);
@@ -3764,7 +3869,7 @@ void write_traintest_peach_color(string dir, float training_fraction)
       int seqnum = index - index_offset;
       string seqfullpathname = fullpathname_from_logdir_and_seqnum(logdir, seqnum);
 
-      seqim = smart_imread(seqfullpathname);
+      seqim = trail_smart_imread(seqfullpathname);
 
       // crop, resize, and WRITE
       
@@ -3822,7 +3927,7 @@ void write_traintest_peach_color(string dir, float training_fraction)
 	  int seqnum = index - index_offset;
 	  string seqfullpathname = fullpathname_from_logdir_and_seqnum(logdir, seqnum);
 	  
-	  seqim = smart_imread(seqfullpathname);
+	  seqim = trail_smart_imread(seqfullpathname);
 
 	  // DISTORT (including crop/resize)...
 
@@ -4003,7 +4108,7 @@ void write_traintest_strawberry_color(string dir, float training_fraction)
 
     //    printf("new %i: reading %s\n", i, TrainTest[i].first.c_str());
 
-    im = smart_imread(TrainTest[i].first);
+    im = trail_smart_imread(TrainTest[i].first);
     string imsig = fullpathname_to_signature(TrainTest[i].first);
 
     // for each, crop, resize, and WRITE
@@ -4262,7 +4367,7 @@ void write_traintest_nontrail_color(string dir, float training_fraction)
 
     //    printf("new %i: reading %s\n", i, TrainTest[i].first.c_str());
 
-    im = smart_imread(BadTrainTest[i]);
+    im = trail_smart_imread(BadTrainTest[i]);
     string imsig = fullpathname_to_signature(BadTrainTest[i]);
 
     // for each, crop, resize, and WRITE
@@ -4496,6 +4601,25 @@ void print_treeparams(FILE *fp, TreeParams & t)
 	  t.v_bottom.x, t.v_bottom.y,
 	  t.dx, t.dy,
 	  t.width);
+}
+
+//----------------------------------------------------------------------------
+
+// ignoring p_annotation
+// assuming type == LIVE_SCALLOP, has_scale == true
+
+void print_scallopparams(FILE *fp, ScallopParams & sc)
+{
+  fprintf(fp, "%i, %i, %i, %i\n",
+	  sc.p_upper_left.x, sc.p_upper_left.y,
+	  sc.p_lower_right.x, sc.p_lower_right.y);
+}
+
+//----------------------------------------------------------------------------
+
+void draw_scallopparams(Mat & draw_im, ScallopParams & sc, int r, int g, int b)
+{
+  rectangle(draw_im, sc.p_upper_left, sc.p_lower_right, Scalar(r, g, b), 2);
 }
 
 //----------------------------------------------------------------------------
@@ -5639,6 +5763,25 @@ void trail_draw_other_windows()
 
 //----------------------------------------------------------------------------
 
+void scallop_traintest_draw_overlay(Mat & draw_im /*, scallop_traintest */)
+{
+  /*
+  for (int j = 0; j < scallop_traintest.size(); j++) {
+    string scallop_image_sig = scallop_traintest[j].first;
+    if (scallop_image_sig == idx_image_sig)  {
+      
+      fprintf(ann_fp, "  <object>\n");
+      fprintf(ann_fp, "    <name>scallop</name>\n");
+      fprintf(ann_fp, "    <pose>Frontal</pose>\n");
+      fprintf(ann_fp, "    <truncated>0</truncated>\n");
+      fprintf(ann_fp, "    <difficult>0</difficult>\n");
+      fprintf(ann_fp, "    <bndbox>\n");
+      
+      ScallopParams scparams = scallop_traintest[j].second;
+  */
+}
+
+//----------------------------------------------------------------------------
 
 void scallop_draw_overlay()
 {
@@ -7018,27 +7161,24 @@ void write_traintest_scallop(string dir, float training_fraction)
 
 //----------------------------------------------------------------------------
 
-// scallop_traintest
-
-void write_scallop_annotations_for_one_image(int idx, string & annotations_path, string & dir_name,
+void write_scallop_annotations_for_one_image(int idx, string & idx_image_sig, string & annotations_path, string & dir_name,
 					     int num_training, int & num_train_scallops, int & num_test_scallops,
-					     vector < string > & image_sig_vect,
 					     vector < pair <string, ScallopParams > > & scallop_traintest)
 {
   FILE *ann_fp = stdout;
   char *ann_filename = (char *) malloc(sizeof(char)*512);
 
   sprintf(ann_filename, "%s/%06i.xml", annotations_path.c_str(), idx);
-  printf("%s\n", ann_filename);
+  //  printf("%s\n", ann_filename);
   ann_fp = fopen(ann_filename, "w"); 
   
   fprintf(ann_fp, "<annotation>\n");
   fprintf(ann_fp, "  <folder>%s</folder>\n", dir_name.c_str());
-  fprintf(ann_fp, "  <filename>%s.jpg</filename>\n", image_sig_vect[idx].c_str());
+  fprintf(ann_fp, "  <filename>%s.jpg</filename>\n", idx_image_sig.c_str());
   
   for (int j = 0; j < scallop_traintest.size(); j++) {
     string scallop_image_sig = scallop_traintest[j].first;
-    if (scallop_image_sig == image_sig_vect[idx])  {
+    if (scallop_image_sig == idx_image_sig)  {
       
       fprintf(ann_fp, "  <object>\n");
       fprintf(ann_fp, "    <name>scallop</name>\n");
@@ -7071,7 +7211,101 @@ void write_scallop_annotations_for_one_image(int idx, string & annotations_path,
 
 //----------------------------------------------------------------------------
 
-void write_traintest_distorted_scallop(string dir, float training_fraction)
+// idx is of the undistorted training image.  this has to change for distorted images
+
+
+void write_scallop_annotations_for_one_image(int idx, vector <string> & image_sig_vect, string & annotations_path, string & dir_name,
+					     vector <ScallopParams> & V_params,
+					     int distort_idx=-1, vector <ScallopDistortParams> * V_distort_ptr=NULL, int special_index=-1)
+{
+  FILE *ann_fp = stdout;
+  char *ann_filename = (char *) malloc(sizeof(char)*512);
+
+  // distorted images need special indices
+
+  if (distort_idx >= 0) 
+    sprintf(ann_filename, "%s/%06i.xml", annotations_path.c_str(), special_index);
+  else
+    sprintf(ann_filename, "%s/%06i.xml", annotations_path.c_str(), idx);
+    
+  //  printf("%s\n", ann_filename);
+  ann_fp = fopen(ann_filename, "w"); 
+  
+  fprintf(ann_fp, "<annotation>\n");
+  fprintf(ann_fp, "  <folder>%s</folder>\n", dir_name.c_str());
+  fprintf(ann_fp, "  <filename>%s.jpg</filename>\n", image_sig_vect[idx].c_str());
+  if (distort_idx >= 0) {
+    fprintf(ann_fp, "  <distortion_x_crop>%i</distortion_x_crop>\n", (*V_distort_ptr)[distort_idx].x_crop);
+    fprintf(ann_fp, "  <distortion_y_crop>%i</distortion_y_crop>\n", (*V_distort_ptr)[distort_idx].y_crop);
+    fprintf(ann_fp, "  <distortion_w_crop>%i</distortion_w_crop>\n", (*V_distort_ptr)[distort_idx].w_crop);
+    fprintf(ann_fp, "  <distortion_h_crop>%i</distortion_h_crop>\n", (*V_distort_ptr)[distort_idx].h_crop);
+    fprintf(ann_fp, "  <distortion_vflip>%i</distortion_vflip>\n", (*V_distort_ptr)[distort_idx].do_vertical_flip);
+    fprintf(ann_fp, "  <distortion_hflip>%i</distortion_hflip>\n", (*V_distort_ptr)[distort_idx].do_horizontal_flip);
+    fprintf(ann_fp, "  <distortion_contrast>%.3f</distortion_contrast>\n", (*V_distort_ptr)[distort_idx].contrast_factor);
+    fprintf(ann_fp, "  <distortion_brightness>%.3f</distortion_brightness>\n", (*V_distort_ptr)[distort_idx].brightness_factor);
+  }
+  
+  for (int i = 0; i < V_params.size(); i++) {
+
+    // DO NOT WRITE IF LESS THAN 50% inside image!!!
+    // also print something for debugging porpoises
+
+    // completely outside
+
+    if (V_params[i].p_lower_right.x < 0 || V_params[i].p_lower_right.y < 0 ||
+	V_params[i].p_upper_left.x >= SCALLOP_IMAGE_WIDTH || V_params[i].p_upper_left.y >= SCALLOP_IMAGE_HEIGHT) {
+      printf("skipping -- completely outside\n");
+      print_scallopparams(stdout, V_params[i]);
+      continue;
+    }
+
+    // completely or partially inside
+    
+    int w = V_params[i].p_lower_right.x - V_params[i].p_upper_left.x;
+    int h = V_params[i].p_lower_right.y - V_params[i].p_upper_left.y;
+
+    int xright = min(V_params[i].p_lower_right.x, SCALLOP_IMAGE_WIDTH - 1);
+    int ybottom = min(V_params[i].p_lower_right.y, SCALLOP_IMAGE_HEIGHT - 1);
+
+    int xleft = max(V_params[i].p_upper_left.x, 0);
+    int ytop = max(V_params[i].p_upper_left.y, 0);
+
+    int w_in = xright - xleft;
+    int h_in = ybottom - ytop;
+
+    float fraction_inside = (float) (w_in * h_in) / (float) (w * h);
+    
+    if (fraction_inside < MIN_SCALLOP_INSIDE_FRACTION) {
+      printf("skipping -- not enough inside (%f)\n", fraction_inside);
+      print_scallopparams(stdout, V_params[i]);
+      continue;
+    }
+    
+    fprintf(ann_fp, "  <object>\n");
+    fprintf(ann_fp, "    <name>scallop</name>\n");
+    fprintf(ann_fp, "    <pose>Frontal</pose>\n");
+    fprintf(ann_fp, "    <truncated>0</truncated>\n");
+    fprintf(ann_fp, "    <difficult>0</difficult>\n");
+    fprintf(ann_fp, "    <bndbox>\n");
+    
+    fprintf(ann_fp, "      <xmin>%i</xmin>\n", V_params[i].p_upper_left.x);
+    fprintf(ann_fp, "      <ymin>%i</ymin>\n", V_params[i].p_upper_left.y);
+    fprintf(ann_fp, "      <xmax>%i</xmax>\n", V_params[i].p_lower_right.x);
+    fprintf(ann_fp, "      <ymax>%i</ymax>\n", V_params[i].p_lower_right.y);
+          
+    fprintf(ann_fp, "    </bndbox>\n");
+    fprintf(ann_fp, "  </object>\n");
+      
+  }
+
+  fprintf(ann_fp, "</annotation>\n");
+  fclose(ann_fp);
+  free(ann_filename);
+}
+
+//----------------------------------------------------------------------------
+
+void write_traintest_distorted_scallop(string write_dir, float training_fraction)
 {
   vector < pair <string, ScallopParams > > scallop_traintest;
   vector < string > image_sig_vect;
@@ -7079,14 +7313,25 @@ void write_traintest_distorted_scallop(string dir, float training_fraction)
   string image_sig;
   set < string > image_sig_set;
   stringstream ss;
-  string annotations_path, imagesets_path;
-
-  ss << "mkdir " << dir << "_" << date_str;
+  string annotations_path, imagesets_path, images_path;
+  Mat current_im, draw_im, distorted_im;
+  vector < ScallopDistortParams > V_distort;
+  vector < ScallopParams > V_params, V_distorted_params;
+  
+  ss << "mkdir " << write_dir << "_" << date_str;
   printf("%s\n", ss.str().c_str());
   system(ss.str().c_str());
 
   ss.str("");
-  ss << dir << "_" << date_str << "/Annotations";
+  ss << write_dir << "_" << date_str << "/JPEGImages";
+  images_path = ss.str();
+  ss.str("");
+  ss << "mkdir " << images_path; 
+  printf("%s\n", ss.str().c_str());
+  system(ss.str().c_str());
+
+  ss.str("");
+  ss << write_dir << "_" << date_str << "/Annotations";
   annotations_path = ss.str();
   ss.str("");
   ss << "mkdir " << annotations_path; 
@@ -7094,7 +7339,7 @@ void write_traintest_distorted_scallop(string dir, float training_fraction)
   system(ss.str().c_str());
 
   ss.str("");
-  ss << dir << "_" << date_str << "/ImageSets";
+  ss << write_dir << "_" << date_str << "/ImageSets";
   imagesets_path = ss.str();
   ss.str("");
   ss << "mkdir " << imagesets_path; 
@@ -7104,7 +7349,7 @@ void write_traintest_distorted_scallop(string dir, float training_fraction)
   printf("csv lines %i, num scallop params %i\n",
 	 (int) scallop_csv_lines.size(), (int) scallop_params_vect.size());
 
-  // filter
+  // filter -- after this, we know that we have scale and live scallop in scallop_traintest
   
   int i, scallop_idx;
 
@@ -7158,7 +7403,7 @@ void write_traintest_distorted_scallop(string dir, float training_fraction)
     
   // write it
 
-  string dir_name = string("scallop_data_") + date_str;
+  string write_dir_name = string("scallop_data_") + date_str;
 
   int num_train_scallops = 0;
   int num_test_scallops = 0;
@@ -7173,16 +7418,30 @@ void write_traintest_distorted_scallop(string dir, float training_fraction)
   char *imcopy_filename = (char *) malloc(sizeof(char)*512);
 
   ss.str("");
-  ss << dir << "_" << date_str;
+  ss << write_dir << "_" << date_str;
 
   sprintf(imcopy_filename, "%s/imcopy.sh", ss.str().c_str());
   imcopy_fp = fopen(imcopy_filename, "w");
-  fprintf(imcopy_fp, "mkdir ./JPEGImages\n");
+  // don't need this anymore...
+  //  fprintf(imcopy_fp, "mkdir ./JPEGImages\n");
+
+  sprintf(distorted_imsets_filename, "%s/distorted_train.txt", imagesets_path.c_str());
+  distorted_imsets_fp = fopen(distorted_imsets_filename, "w");
+
+  vector <int> Distortion_idx;
+  for (int i = 0; i < num_training * distort_num_per_image; i++) {
+    Distortion_idx.push_back(i + (int) image_sig_vect.size());
+    fprintf(distorted_imsets_fp, "%06i\n", Distortion_idx[i]);
+  }
+  random_shuffle(Distortion_idx.begin(), Distortion_idx.end());
+  fclose(distorted_imsets_fp);
   
   for (int i = 0; i < image_sig_vect.size(); i++) {
 
     // image copy command -- so we only get the relevant images (distorts are not included here, as they will be generated automatically)
 
+    // note that we are assuming constant read directory here -- not gonna be true forever
+    
     fprintf(imcopy_fp, "cp ~/Documents/data/scallops/images/%s.jpg JPEGImages/%06i.jpg\n",
 	    image_sig_vect[i].c_str(), i);
     
@@ -7191,35 +7450,99 @@ void write_traintest_distorted_scallop(string dir, float training_fraction)
     if (i == 0) {
       sprintf(imsets_filename, "%s/train.txt", imagesets_path.c_str());
       imsets_fp = fopen(imsets_filename, "w");
-      sprintf(distorted_imsets_filename, "%s/distorted_train.txt", imagesets_path.c_str());
-      distorted_imsets_fp = fopen(distorted_imsets_filename, "w");
     }
     else if (i == num_training) {
       fclose(imsets_fp);
-      fclose(distorted_imsets_fp);
       sprintf(imsets_filename, "%s/test.txt", imagesets_path.c_str());
       imsets_fp = fopen(imsets_filename, "w");
     }
 
     fprintf(imsets_fp, "%06i\n", i);
 
+    // search through all scallops for the ones in this image, collect into vector
+
+    V_params.clear();
+      
+    for (int k = 0; k < scallop_traintest.size(); k++) {
+      
+      string scallop_image_sig = scallop_traintest[k].first;
+      
+      if (scallop_image_sig == image_sig_vect[i])  {
+	ScallopParams scparams = scallop_traintest[k].second;
+	V_params.push_back(scparams);
+	//	  print_scallopparams(stdout, scparams);
+	//	  draw_scallopparams(draw_im, scparams, 255, 0, 255);
+      }
+    }
+
     // all images have annotation data written
 
-    write_scallop_annotations_for_one_image(i, annotations_path, dir_name,
-					    num_training, num_train_scallops, num_test_scallops,
-					    image_sig_vect, scallop_traintest);
+    write_scallop_annotations_for_one_image(i, image_sig_vect, annotations_path, write_dir_name, V_params);
 
-    // everything related to distortions happens here
+    // if training image, create distortions
+    // as with the trail, we need random mixing of these distorted image/annotations.  so we need to precompute indices and permute them
+    
+    if (i < num_training) {
 
-    vector <ScallopDistortParams> V_distort;
-    // load im corresponding to image_sig_vect[i]
-    //    precompute_scallop_image_distortions(im, distort_num_per_image, V_distort);  // this is a global also used by trail and tree distortions
+      num_train_scallops += V_params.size();
+      
+      // load im corresponding to image_sig_vect[i]
 
-    for (int j = 0; j < V_distort.size(); j++) {  
+      string imname("/home/cer/Documents/data/scallops/images/" + image_sig_vect[i] + ".jpg");
+      
+      printf("%i [%i]\n", i, (int) image_sig_vect.size());
+      current_im = imread(imname.c_str());
+      draw_im = current_im.clone();
+      
+      //      imshow("predistort", draw_im);  
 
+      // compute and apply distorts
+
+      V_distort.clear();
+      precompute_scallop_image_distortions(current_im, distort_num_per_image, V_distort);  // distort_num* is a global also used by trail and tree distortions
+
+      for (int j = 0; j < V_distort.size(); j++) {  
+
+	//print_scallop_distortion(stdout, V_distort[j]);
+
+	// apply V_distort[j] to image and annotations
+
+	distorted_im = apply_precomputed_scallop_distortion(V_distort[j], current_im, V_params, V_distorted_params);
+	
+	//draw_im = distorted_im.clone();
+
+	//	for (int k = 0; k < V_distorted_params.size(); k++)
+	//  draw_scallopparams(draw_im, V_distorted_params[k], 255, 0, 255);
+
+	//        imshow("distort", draw_im);  
+	//char c = waitKey(0);
+
+	// write distorted image and annotations 
+
+	//	int special_index = image_sig_vect.size() + i * V_distort.size() + j;
+	int special_index = Distortion_idx[i * V_distort.size() + j];
+
+	char *s_distorted_imname = (char *) malloc(512*sizeof(char));
+	//	string distorted_imname("/home/cer/Documents/data/scallops/images/" + image_sig_vect[i] + "_" + string(j) + ".jpg");
+	//sprintf(s_distorted_imname, "/home/cer/Documents/data/scallops/images/distorted_%s_%02i.jpg", image_sig_vect[i].c_str(), j);
+	sprintf(s_distorted_imname, "%s/%06i.jpg", images_path.c_str(), special_index);
+	
+	
+	//	printf("%i %s\n", j, s_distorted_imname);
+	//printf("%s/%06i.jpg", images_path.c_str(), special_index);
+	imwrite(s_distorted_imname, distorted_im);
+
+	write_scallop_annotations_for_one_image(i, image_sig_vect, annotations_path, write_dir_name, V_distorted_params,
+						j, &V_distort, special_index);
+
+	free(s_distorted_imname);
+      }
     }
-  }
+    else
+      num_test_scallops += V_params.size();
 
+  }
+  
   fclose(imsets_fp);
   fclose(imcopy_fp);
 
@@ -8228,7 +8551,7 @@ void zmax()
     //  Mat M = Mat::zeros(480, 640, CV_8UC3);
     //  Mat M = Mat::zeros(CANONICAL_IMAGE_HEIGHT, CANONICAL_IMAGE_WIDTH, CV_8UC3);
     
-    M = smart_imread(zmax_image_filename[j]);
+    M = trail_smart_imread(zmax_image_filename[j]);
     
     xml_filename = zmax_imname_to_xmlname(zmax_image_filename[j], signature);
     //    printf("%s\n", xml_filename.c_str());
@@ -8450,7 +8773,7 @@ int main( int argc, const char** argv )
 
       current_imname = Fullpathname_vect[current_index];
       
-      current_im = smart_imread(current_imname);
+      current_im = trail_smart_imread(current_imname);
       draw_im = current_im.clone();
       
       // show image 
